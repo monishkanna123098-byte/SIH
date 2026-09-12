@@ -1,0 +1,195 @@
+/* Hand-written. No framework, no CDN, no icon font -- this has to run on a
+   laptop with networking off. Government-formal: real tables, visible rules,
+   generous whitespace, no gradients, no shadows, no rounded cards, no
+   animation, no emoji.
+
+   The three source tiers are styled to look DIFFERENT from each other on
+   purpose (invariant 3). The declarations table is plain; the character-height
+   box is cream with a heavy navy border; the determination is a form. If these
+   ever start to look alike, the product has been normalised away. */
+
+:root {
+  --navy: #0A1628;
+  --ink: #1a1a1a;
+  --grey: #555;
+  --rule: #BBB;
+  --paper: #fff;
+  --measured-bg: #F3F0E7;
+  --fail-bg: #F6E4E4;
+  --head-bg: #E8ECF1;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+h1, h2, h3, th { font-family: Georgia, "Times New Roman", serif; }
+h1 { font-size: 20px; margin: 0 0 4px; color: var(--navy); font-weight: 700; }
+h2 { font-size: 16px; margin: 28px 0 8px; color: var(--navy); font-weight: 700; }
+h3 { font-size: 14px; margin: 18px 0 6px; color: var(--navy); }
+
+a { color: var(--navy); }
+
+/* ---- frame ---------------------------------------------------------- */
+header.masthead {
+  border-bottom: 2px solid var(--navy);
+  padding: 14px 28px 10px;
+}
+header.masthead .title {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 17px; font-weight: 700; color: var(--navy);
+}
+header.masthead .sub { font-size: 12px; color: var(--grey); }
+
+nav.bar {
+  border-bottom: 1px solid var(--rule);
+  padding: 8px 28px;
+  font-size: 14px;
+  display: flex; flex-wrap: wrap; gap: 18px; align-items: baseline;
+}
+nav.bar a { text-decoration: none; }
+nav.bar a:hover, nav.bar a.on { text-decoration: underline; }
+nav.bar .who { margin-left: auto; color: var(--grey); font-size: 13px; }
+
+main { padding: 22px 28px 60px; max-width: 1060px; }
+footer.foot {
+  border-top: 1px solid var(--rule);
+  margin: 40px 28px 20px; padding-top: 10px;
+  font-size: 11.5px; color: var(--grey);
+}
+
+/* ---- tables --------------------------------------------------------- */
+table { border-collapse: collapse; width: 100%; margin: 8px 0 4px; }
+th, td {
+  border: 1px solid var(--rule);
+  padding: 6px 8px; text-align: left; vertical-align: top; font-size: 13px;
+}
+th { background: var(--head-bg); font-weight: 700; color: var(--navy); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ---- verdicts: three states, never two.
+   No green ticks, no red crosses, no traffic lights -- a two-colour icon set
+   silently collapses three states into two. Weight and one muted background
+   carry the distinction instead. ------------------------------------------ */
+.verdict { font-weight: 700; font-size: 12px; letter-spacing: .02em; white-space: nowrap; }
+tr.v-FAIL td { background: var(--fail-bg); }
+.verdict.v-CANNOT_DETERMINE { font-weight: 600; color: var(--grey); }
+
+.tier {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 11px; color: var(--grey); font-weight: 400;
+}
+
+/* ---- section 2: MEASURED. Deliberately not the same as the table above --- */
+.measured {
+  background: var(--measured-bg);
+  border: 1.5px solid var(--navy);
+  padding: 14px 16px; margin: 8px 0 4px;
+}
+.measured table, .measured th, .measured td { border: none; }
+.measured table { width: 100%; }
+.measured th {
+  background: transparent; width: 160px; padding: 3px 10px 3px 0;
+  color: var(--navy); font-size: 13px;
+}
+.measured td { padding: 3px 0; font-size: 13px; }
+.measured .absent { color: var(--grey); font-style: italic; }
+.measured .manifest {
+  font-family: "Courier New", Courier, monospace;
+  font-size: 11.5px; color: var(--grey); white-space: pre-wrap;
+  margin-top: 10px; border-top: 1px solid var(--rule); padding-top: 8px;
+}
+
+/* ---- section 3: DETERMINED ------------------------------------------- */
+.determination { border: 1px solid var(--navy); padding: 14px 16px; }
+.determination .recorded { font-size: 14px; }
+
+/* ---- forms ----------------------------------------------------------- */
+fieldset { border: 1px solid var(--rule); padding: 14px 16px; margin: 0 0 18px; }
+legend {
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 700; color: var(--navy); padding: 0 6px; font-size: 14px;
+}
+label { display: block; font-size: 13px; margin-bottom: 3px; }
+label.inline { display: inline; margin-right: 16px; font-size: 13.5px; }
+input[type=text], input[type=password], input[type=number], textarea, select {
+  font-family: inherit; font-size: 13.5px;
+  padding: 5px 7px; border: 1px solid var(--rule); background: #fff;
+  color: var(--ink); width: 100%; max-width: 560px;
+}
+textarea { min-height: 54px; }
+input[type=file] { font-size: 13px; }
+.field { margin-bottom: 12px; }
+.hint { font-size: 12px; color: var(--grey); margin-top: 2px; }
+.declared-tag {
+  font-size: 11px; color: var(--grey); text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+button, .btn {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 14px; padding: 7px 18px;
+  background: var(--navy); color: #fff; border: 1px solid var(--navy);
+  cursor: pointer; text-decoration: none; display: inline-block;
+}
+button:hover, .btn:hover { background: #16243a; }
+.btn.secondary { background: #fff; color: var(--navy); }
+.btn.secondary:hover { background: var(--head-bg); }
+
+/* ---- coverage block: the part that unlocks absence claims -------------- */
+.coverage { border: 1.5px solid var(--navy); padding: 14px 16px; margin-bottom: 18px; }
+.coverage legend { font-size: 14px; }
+.coverage .consequence {
+  font-size: 13px; color: var(--ink); margin: 8px 0 0;
+  border-left: 3px solid var(--navy); padding-left: 10px;
+}
+
+/* ---- headline + counts ------------------------------------------------ */
+.headline {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 17px; font-weight: 700; color: var(--navy); margin: 2px 0 6px;
+}
+.counts { font-size: 13px; color: var(--ink); }
+.counts span { margin-right: 22px; }
+.counts b { font-variant-numeric: tabular-nums; }
+
+/* ---- dashboard counters. Counts only -- no percentage, no chart, no
+   compliance rate (invariant 4). If a chart feels missing, that is the
+   invariant working. ---------------------------------------------------- */
+.counters { display: flex; flex-wrap: wrap; gap: 16px; margin: 10px 0 6px; }
+.counter { border: 1px solid var(--navy); padding: 12px 18px; min-width: 172px; }
+.counter .n {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 28px; color: var(--navy); font-variant-numeric: tabular-nums;
+}
+.counter .k { font-size: 12px; color: var(--grey); }
+
+/* ---- misc ------------------------------------------------------------- */
+.notice { border: 1px solid var(--navy); background: var(--head-bg);
+          padding: 9px 12px; font-size: 13px; margin-bottom: 16px; }
+.provenance { font-size: 12px; color: var(--grey); }
+.provenance .line { font-family: "Courier New", Courier, monospace; font-size: 11.5px; }
+.digest { font-family: "Courier New", Courier, monospace; font-size: 11.5px;
+          word-break: break-all; }
+.meta th { width: 150px; }
+details.chain { margin-top: 4px; }
+details.chain summary { font-size: 11.5px; color: var(--grey); cursor: pointer; }
+details.chain pre {
+  font-family: "Courier New", Courier, monospace; font-size: 11.5px;
+  white-space: pre-wrap; margin: 5px 0 0; color: var(--ink);
+}
+.evidence img { max-width: 380px; border: 1px solid var(--rule); }
+.login-box { max-width: 360px; margin: 50px auto; border: 1px solid var(--navy);
+             padding: 22px 24px; }
+.error { border-left: 3px solid #8B1A1A; background: var(--fail-bg);
+         padding: 8px 12px; font-size: 13px; margin-bottom: 14px; }
+.searchrow { display: flex; gap: 10px; align-items: center; margin-bottom: 4px; }
+.searchrow input[type=text] { max-width: 340px; }

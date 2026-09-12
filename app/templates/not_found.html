@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Not found{% endblock %}
+{% block content %}
+<h1>No such inspection</h1>
+<p>There is no inspection with the identifier
+   <b>{{ inspection_id }}</b> on this machine.</p>
+<p><a class="btn secondary" href="/history">Back to history</a></p>
+{% endblock %}

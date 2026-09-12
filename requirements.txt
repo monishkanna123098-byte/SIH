@@ -1,0 +1,18 @@
+# Everything is pip-installable and nothing is fetched at runtime: no CDN
+# fonts, no CDN CSS, no icon library. The app runs with networking disabled.
+#
+# Web application (chunk 4)
+fastapi
+uvicorn
+jinja2
+python-multipart
+# Reports -- lm_report imports these lazily, inside render_pdf/render_docx
+reportlab
+python-docx
+# Measurement engine and the integration regression test
+numpy
+scipy
+opencv-python-headless
+pillow
+# Test client for test_webapp.py only
+httpx

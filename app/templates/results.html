@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title %}{{ v.scan.inspection_id }} &mdash; inspection record{% endblock %}
+{% block content %}
+
+{# Header. Headline and three counts. No percentage, no score, no grade, no
+   progress ring -- summarise() has no score field and there is a test
+   asserting so (invariant 4). #}
+<h1>Inspection {{ v.scan.inspection_id }}</h1>
+<div class="headline">{{ v.headline }}</div>
+<div class="counts">
+  <span>PASS <b>{{ v.counts.PASS }}</b></span>
+  <span>FAIL <b>{{ v.counts.FAIL }}</b></span>
+  <span>CANNOT DETERMINE <b>{{ v.counts.CANNOT_DETERMINE }}</b></span>
+</div>
+
+<table class="meta">
+  <tr><th>Product</th><td>{{ v.scan.product_name }}</td>
+      <th>Inspected on</th><td>{{ v.scan.created_at }}</td></tr>
+  <tr><th>Officer</th><td>{{ v.scan.officer_username }}
+        ({{ v.scan.officer_role }})</td>
+      <th>Category <span class="declared-tag">declared</span></th>
+      <td>{{ v.scan.declared_category or '—' }}</td></tr>
+  <tr><th>PDP area <span class="declared-tag">declared</span></th>
+      <td>{% if v.scan.declared_pdp_area_cm2 is not none %}
+          {{ v.scan.declared_pdp_area_cm2 }} cm&sup2;{% else %}—{% endif %}</td>
+      <th>Evidence image</th>
+      <td>{% if v.scan.image_path %}
+          <a href="/scan/{{ v.scan.inspection_id }}/image">view</a>
+          {% else %}none{% endif %}</td></tr>
+</table>
+
+<p style="margin-top:14px">
+  <a class="btn secondary" href="/scan/{{ v.scan.inspection_id }}/report.pdf">Download PDF</a>
+  <a class="btn secondary" href="/scan/{{ v.scan.inspection_id }}/report.docx">Download DOCX</a>
+</p>
+
+{# ---- Section 1 -- EXTRACTED. Plain table, light grey header.
+   No green ticks, no red crosses, no traffic lights: a two-colour icon set
+   silently collapses three states into two (invariant 1). ---------------- #}
+<h2>Mandatory declarations &mdash; Rule 6(1)
+    <span class="tier">[tier: EXTRACTED]</span></h2>
+<table>
+  <tr><th style="width:118px">Verdict</th><th style="width:190px">Declaration</th>
+      <th style="width:150px">Detected</th><th>Why</th>
+      <th style="width:128px">Citation</th></tr>
+  {% for f in v.findings %}
+  <tr class="v-{{ f.verdict }}">
+    <td><span class="verdict v-{{ f.verdict }}">
+        {{ f.verdict.replace('_', ' ') }}</span></td>
+    <td>{{ f.label }}</td>
+    <td>{{ f.detected if f.detected else '—' }}</td>
+    <td>{{ f.why }}
+      <details class="chain"><summary>explainability chain</summary>
+        <pre>{% for line in f.chain %}{{ line }}
+{% endfor %}</pre></details>
+    </td>
+    <td>{{ f.citation }}</td>
+  </tr>
+  {% endfor %}
+</table>
+
+{# ---- Section 2 -- MEASURED. Deliberately NOT the same as the table above.
+   Cream ground, heavy navy border, key/value rows. The section is shown even
+   with no measurement: its presence is the point (invariant 3). ---------- #}
+<h2>Character height &mdash; Rule 7(2)
+    <span class="tier">[tier: MEASURED]</span></h2>
+<div class="measured">
+{% if v.measurement %}
+  <table>
+    <tr><th>Verdict</th><td>{{ v.measurement.verdict.replace('_', ' ') }}</td></tr>
+    <tr><th>Measured</th><td>{{ v.measurement.stated }}</td></tr>
+    <tr><th>Required</th><td>{{ v.measurement.threshold }}</td></tr>
+    <tr><th>Threshold source</th>
+        <td>{{ v.measurement.threshold_source_tier }}</td></tr>
+    <tr><th>Basis</th><td>{{ v.measurement.basis }}</td></tr>
+    {% if v.measurement.convention %}
+    <tr><th>Convention</th><td>{{ v.measurement.convention }}</td></tr>
+    {% endif %}
+    {% if v.measurement.roi_box %}
+    <tr><th>Region measured</th>
+        <td>{{ v.measurement.roi_box }} (operator-declared)</td></tr>
+    {% endif %}
+  </table>
+  {% if v.measurement.manifest %}
+  <div class="manifest">Capture manifest
+{% for line in v.measurement.manifest %}{{ line }}
+{% endfor %}</div>
+  {% endif %}
+{% else %}
+  <div class="absent">Not yet measured &mdash; this inspection has no height
+    measurement.</div>
+{% endif %}
+</div>
+
+{# ---- Section 3 -- DETERMINED. A form, empty until filled. -------------- #}
+<h2>Officer determination <span class="tier">[tier: DETERMINED]</span></h2>
+<div class="determination">
+{% if v.determination %}
+  <div class="recorded">
+    <b>{{ v.determination.verdict }}</b> &mdash; {{ v.determination.officer_id }}{%
+      if v.determination.determined_on %}, {{ v.determination.determined_on }}{% endif %}
+    {% if v.determination.note %}<br>{{ v.determination.note }}{% endif %}
+  </div>
+{% endif %}
+{% if request.query_params.get('denied') %}
+  <div class="notice">Recording a determination on this inspection is limited
+    to a supervisor or to the officer who created it.</div>
+{% endif %}
+{% if request.query_params.get('blank') %}
+  <div class="notice">A determination needs a verdict in your own words.</div>
+{% endif %}
+{% if may_determine %}
+  <form method="post" action="/scan/{{ v.scan.inspection_id }}/determination">
+    <div class="field">
+      <label for="verdict">Determination{% if v.determination %}
+        (recording a new one supersedes the above){% endif %}</label>
+      <input type="text" id="verdict" name="verdict">
+      <div class="hint">Your own words. This tier overrides both of the
+        above and is recorded against your name.</div>
+    </div>
+    <div class="field">
+      <label for="note">Note</label>
+      <textarea id="note" name="note"></textarea>
+    </div>
+    <button type="submit">Record determination</button>
+  </form>
+{% elif not v.determination %}
+  <div class="absent">No determination recorded. A supervisor, or the officer
+    who created this inspection, may record one.</div>
+{% endif %}
+</div>
+
+{# ---- Below all three: tier notes, coverage, extraction provenance ------ #}
+<h2>How each finding was obtained</h2>
+<div class="provenance">
+  {% for tier, note in v.tier_notes %}
+  <p><b>{{ tier }}</b> &mdash; {{ note }}</p>
+  {% endfor %}
+  <p><b>Coverage</b> &mdash; {{ v.coverage_description }}</p>
+  {% for line in v.provenance %}
+    {% if not line.strip().lower().startswith('coverage') %}
+    <div class="line">{{ line }}</div>
+    {% endif %}
+  {% endfor %}
+  <p style="margin-top:12px">
+    {% for ev in v.engine_versions %}Engine: {{ ev }}<br>{% endfor %}
+  </p>
+  <p><b>Record digest (SHA-256)</b></p>
+  <div class="digest">{{ v.content_hash }}</div>
+  <p>{{ v.hash_note }}</p>
+</div>
+{% endblock %}

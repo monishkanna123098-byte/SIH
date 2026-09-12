@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}New inspection{% endblock %}
+{% block content %}
+<h1>New inspection</h1>
+
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+<form method="post" action="/upload" enctype="multipart/form-data">
+
+<fieldset>
+  <legend>1 &middot; Product</legend>
+
+  <div class="field">
+    <label for="product_name">Product name <b>(required)</b></label>
+    <input type="text" id="product_name" name="product_name"
+           value="{{ form.product_name or '' }}">
+  </div>
+
+  <div class="field">
+    <label for="image">Evidence image (optional)</label>
+    <input type="file" id="image" name="image" accept="image/*">
+    <div class="hint">Stored with the record as supporting evidence. No
+      measurement is taken from it in this build.</div>
+  </div>
+
+  <div class="field">
+    <label for="declared_category">Category
+      <span class="declared-tag">&mdash; operator declared</span></label>
+    <select id="declared_category" name="declared_category">
+      <option value="">(not declared)</option>
+      {% for c in categories %}
+      <option value="{{ c }}"
+        {% if form.declared_category == c %}selected{% endif %}>{{ c }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="field">
+    <label for="declared_pdp_area_cm2">Principal display panel area, cm&sup2;
+      <span class="declared-tag">&mdash; operator declared</span></label>
+    <input type="text" id="declared_pdp_area_cm2" name="declared_pdp_area_cm2"
+           value="{{ form.declared_pdp_area_cm2 or '' }}">
+    <div class="hint">Neither the category nor the panel area is discoverable
+      from an image. Both are claims you are making, and both are recorded as
+      yours.</div>
+  </div>
+</fieldset>
+
+<fieldset>
+  <legend>2 &middot; Declarations read off the package &mdash; Rule 6(1)</legend>
+  <div class="hint" style="margin-bottom:12px">
+    Type each declaration exactly as it appears on the package. A field you
+    leave blank is recorded as <b>not read</b>. Whether that becomes a
+    violation or an undetermined finding is decided by the coverage
+    declaration below &mdash; not by leaving the box empty.
+  </div>
+  {% for f in fields %}
+  <div class="field">
+    <label for="{{ f.key }}">{{ f.label }}</label>
+    <input type="text" id="{{ f.key }}" name="{{ f.key }}"
+           value="{{ values.get(f.key, '') }}">
+    <div class="hint">{{ f.expected }}</div>
+  </div>
+  {% endfor %}
+</fieldset>
+
+<fieldset class="coverage">
+  <legend>3 &middot; Coverage declaration</legend>
+
+  <div class="field">
+    <label>Panels captured</label>
+    {% for p in panels %}
+    <label class="inline">
+      <input type="checkbox" name="panels" value="{{ p }}"
+        {% if p in (form.panels or []) %}checked{% endif %}> {{ p }}
+    </label>
+    {% endfor %}
+  </div>
+
+  <div class="field">
+    <label class="inline">
+      <input type="checkbox" name="operator_examined_package" value="1"
+        {% if form.examined %}checked{% endif %}>
+      I have examined the physical package itself, not only these images.
+    </label>
+    <p class="consequence">
+      Ticking this means a person had the package in hand and looked. It is what
+      allows a missing declaration to be recorded as a violation rather than as
+      undetermined. Leave it unticked if you are working from images alone.
+    </p>
+  </div>
+
+  <div class="field">
+    <label for="operator_id">Operator ID</label>
+    <input type="text" id="operator_id" name="operator_id"
+           value="{{ form.operator_id or '' }}">
+    <div class="hint">Required with the tick above. The claim is recorded
+      against this name.</div>
+  </div>
+
+  <div class="field">
+    <label for="coverage_note">Note</label>
+    <input type="text" id="coverage_note" name="coverage_note"
+           value="{{ form.coverage_note or '' }}">
+  </div>
+</fieldset>
+
+<button type="submit">Record inspection</button>
+</form>
+{% endblock %}

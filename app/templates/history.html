@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}History{% endblock %}
+{% block content %}
+<h1>Inspection history</h1>
+
+<form method="get" action="/history" class="searchrow">
+  <input type="text" name="q" value="{{ q }}"
+         placeholder="product, inspection ID or officer">
+  <button type="submit">Search</button>
+  {% if q %}<a class="btn secondary" href="/history">Clear</a>{% endif %}
+</form>
+<div class="hint">{{ rows|length }} inspection{{ '' if rows|length == 1 else 's' }}
+  {% if q %}matching &ldquo;{{ q }}&rdquo;{% endif %}, newest first.</div>
+
+<table>
+  <tr><th style="width:150px">Date</th><th style="width:135px">Inspection ID</th>
+      <th>Product</th><th style="width:110px">Officer</th>
+      <th style="width:210px">Headline</th>
+      <th style="width:60px">PASS</th><th style="width:60px">FAIL</th>
+      <th style="width:110px">CANNOT<br>DETERMINE</th></tr>
+  {% for r in rows %}
+  <tr>
+    <td>{{ r.created_at }}</td>
+    <td><a href="/scan/{{ r.inspection_id }}">{{ r.inspection_id }}</a></td>
+    <td>{{ r.product_name }}</td>
+    <td>{{ r.officer_username }}</td>
+    <td>{{ r.headline }}</td>
+    <td class="num">{{ r.n_pass }}</td>
+    <td class="num">{{ r.n_fail }}</td>
+    <td class="num">{{ r.n_cannot }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="8">No inspections recorded{% if q %} for this search{% endif %}.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

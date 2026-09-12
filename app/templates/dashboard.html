@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+{# Counters only. No percentages, no charts, no compliance rate (invariant 4).
+   A percentage would imply the six declarations are commensurable and that
+   CANNOT_DETERMINE can be averaged with PASS. Neither is true. If a chart
+   feels missing here, that is the invariant working. #}
+<div class="counters">
+  <div class="counter"><div class="n">{{ d.total }}</div>
+    <div class="k">inspections recorded</div></div>
+  <div class="counter"><div class="n">{{ d.any_fail }}</div>
+    <div class="k">with at least one FAIL</div></div>
+  <div class="counter"><div class="n">{{ d.any_cannot }}</div>
+    <div class="k">with at least one CANNOT DETERMINE<br>and no FAIL</div></div>
+  <div class="counter"><div class="n">{{ d.clean }}</div>
+    <div class="k">with no FAIL and none undetermined</div></div>
+</div>
+
+<h2>Ten most recent</h2>
+<table>
+  <tr><th style="width:150px">Date</th><th style="width:135px">Inspection ID</th>
+      <th>Product</th><th style="width:110px">Officer</th>
+      <th style="width:210px">Headline</th></tr>
+  {% for r in d.recent %}
+  <tr>
+    <td>{{ r.created_at }}</td>
+    <td><a href="/scan/{{ r.inspection_id }}">{{ r.inspection_id }}</a></td>
+    <td>{{ r.product_name }}</td>
+    <td>{{ r.officer_username }}</td>
+    <td>{{ r.headline }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5">No inspections recorded.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

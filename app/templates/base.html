@@ -1,0 +1,38 @@
+{# No State Emblem of India, no national flag, no "Government of India" or
+   ministry attribution anywhere in this application. Use of the emblem is
+   restricted under the State Emblem of India (Prohibition of Improper Use)
+   Act, 2005, and a compliance project with a compliance problem on its own
+   landing page is not a risk worth taking. #}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Inspection record{% endblock %}</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="masthead">
+  <div class="title">Legal Metrology (Packaged Commodities) Rules, 2011</div>
+  <div class="sub">Inspection record &mdash; declaration checks and
+    scale-referenced character height</div>
+</header>
+{% if user %}
+<nav class="bar">
+  <a href="/upload">New inspection</a>
+  <a href="/history">History</a>
+  <a href="/dashboard">Dashboard</a>
+  <span class="who">{{ user.username }} &middot; {{ user.role }} &nbsp;
+    <a href="/logout">Sign out</a></span>
+</nav>
+{% endif %}
+<main>
+{% block content %}{% endblock %}
+</main>
+<footer class="foot">
+  This instrument reports three states per finding &mdash; PASS, FAIL and
+  CANNOT&nbsp;DETERMINE. A declaration it could not read is not recorded as a
+  violation. It issues no compliance score, percentage or grade.
+</footer>
+</body>
+</html>
