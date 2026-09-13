@@ -685,9 +685,15 @@ def main() -> int:
        len(service.PIPELINE_STAGES) == 5
        and "PENALTY" not in _strip_html.upper()
        and "penalty" not in open("app/service.py").read().lower())
+    # Comments stripped first, for the same reason as the CSS block above:
+    # roi.js documents that it uses no timer, so a bare substring test over the
+    # raw text matches that sentence rather than any code.
+    _roi_code = re.sub(r"/\*.*?\*/", "", open("app/static/roi.js").read(), flags=re.S)
+    _roi_code = re.sub(r"^\s*//.*$", "", _roi_code, flags=re.M)
     ck("24.5 stage state comes from the record, not a timer",
-       "setTimeout" not in _pipe_css and "setInterval" not in open(
-           "app/static/roi.js").read())
+       "setTimeout" not in _pipe_css and "setTimeout" not in _roi_code
+       and "setInterval" not in _roi_code,
+       "a timer drives state")
 
     # ---- 25. responsive, motion, dependencies ---------------------------
     ck("25.1 stacks vertically below 700px",

@@ -288,6 +288,19 @@ details.chain pre {
 }
 .pipeline .s-refused .st-val { font-weight: 700; }
 
+/* In-flight: set by the browser while a measurement request is actually
+   running, and cleared by the response replacing the page. Distinct from all
+   three stored states, and never rendered by the server -- the server only
+   ever knows pending, done or refused. A static marker, no animation: the
+   duration is not known and a bar that implies otherwise would be the same
+   dishonesty as a compliance score. */
+.pipeline .s-inflight {
+  border-top-color: var(--navy);
+  border-top-style: solid;
+  background: var(--head-bg);
+}
+.pipeline .s-inflight .st-val { font-style: italic; color: var(--grey); }
+
 @media (max-width: 700px) {
   .pipeline { display: block; border-bottom: none; }
   .pipeline .stage {

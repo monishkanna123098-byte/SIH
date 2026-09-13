@@ -102,3 +102,59 @@
   window.addEventListener("resize", fit);
   if (img.complete) { fit(); } else { img.addEventListener("load", fit); }
 })();
+
+/* ---------------------------------------------------------------------------
+   The in-flight "Measuring..." state.
+
+   A scale-referenced measurement on a large capture takes seconds, and the
+   browser shows the OLD page for the whole of that time. Silence reads as a
+   hang. This marks the measurement as running the moment the request is sent,
+   and the state clears because the response replaces the page -- it is driven
+   by the actual request, never by a timer, and there is no setTimeout or
+   setInterval anywhere in this file.
+
+   Deliberately no percentage, no progress bar, no completion ring, and no
+   spinner implying a known duration: the duration is not known, and a bar that
+   pretends otherwise is the same dishonesty as a compliance score. Plain text
+   and one static marker.
+--------------------------------------------------------------------------- */
+(function () {
+  "use strict";
+  var form = document.querySelector('form[action$="/measure"]');
+  if (!form) { return; }
+  var btn = document.getElementById("measure-submit");
+  var panel = document.getElementById("measured-panel");
+  var stage = document.querySelector('.pipeline .stage[data-stage="MEASURE"]');
+
+  function markRunning() {
+    if (btn) { btn.disabled = true; btn.textContent = "Measuring..."; }
+    if (panel) {
+      panel.innerHTML = "";
+      var h = document.createElement("div");
+      h.className = "m-headline";
+      h.textContent = "Measuring...";
+      var p = document.createElement("p");
+      p.className = "m-body";
+      p.textContent = "Measuring the operator-declared region against the "
+        + "scale reference. This takes longer on a large capture.";
+      panel.appendChild(h); panel.appendChild(p);
+    }
+    if (stage) {
+      stage.className = "stage s-inflight";
+      var vals = stage.querySelectorAll(".st-val, .st-note");
+      for (var i = 0; i < vals.length; i++) { vals[i].remove(); }
+      var v = document.createElement("div");
+      v.className = "st-val";
+      v.textContent = "measuring...";
+      stage.appendChild(v);
+    }
+  }
+
+  form.addEventListener("submit", function () { markRunning(); });
+
+  /* Coming back via the bfcache would otherwise restore a page frozen in the
+     running state for a request that finished long ago. */
+  window.addEventListener("pageshow", function (ev) {
+    if (ev.persisted && btn) { btn.disabled = false; btn.textContent = "Measure this region"; }
+  });
+})();

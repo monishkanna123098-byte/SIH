@@ -331,18 +331,32 @@ def _next_action(m) -> str:
 def _measurement_view(rec, scan: dict) -> dict:
     """The cream box, in every state it can be in.
 
-    `state` is one of: measured, no_image, no_scale, not_measured. There is no
-    fifth state in which a height is assumed from a DPI -- a pixel height
-    divided by an assumed DPI is the naive method `naive_vs_calibrated.py`
-    exists to discredit, and it is not offered here as a fallback, an option,
-    or a form default.
+    `state` is one of: measured, no_image, no_scale, unreadable_image,
+    not_measured. There is no further state in which a height is assumed from a
+    DPI -- a pixel height divided by an assumed DPI is the naive method
+    `naive_vs_calibrated.py` exists to discredit, and it is not offered here as
+    a fallback, an option, or a form default.
+
+    `unreadable_image` exists so the page never tells an operator to draw a
+    region it is not going to render. Uploads are validated now, so this should
+    only be reachable if a stored file is later corrupted or removed.
     """
     m = rec.measurement
     size = image_size(scan)
+
+    def _state() -> str:
+        if m is not None:
+            return "measured"
+        if not scan["image_path"]:
+            return "no_image"
+        if scan["scale_ppm"] is None:
+            return "no_scale"
+        if size is None:
+            return "unreadable_image"
+        return "not_measured"
+
     base = {
-        "state": "measured" if m is not None else
-                 ("no_image" if not scan["image_path"] else
-                  ("no_scale" if scan["scale_ppm"] is None else "not_measured")),
+        "state": _state(),
         "image_w": size[0] if size else None,
         "image_h": size[1] if size else None,
         "scale_ppm": scan["scale_ppm"],
@@ -738,8 +752,17 @@ def measure_scan(inspection_id: str, box) -> tuple[bool, str]:
 
     try:
         roi = _crop_roi(scan, box)
-    except (OSError, ValueError) as exc:
-        return False, str(exc) or "The evidence image could not be read."
+    except ValueError as exc:
+        # Raised by this module, with text written for an operator. Safe to show.
+        return False, str(exc) or "The selected region could not be used."
+    except OSError:
+        # Raised by the imaging library, whose message embeds the absolute file
+        # path. Never surfaced: it would put the server's filesystem layout in
+        # the address bar, in browser history and on any screen-share. Files are
+        # referred to by inspection_id and resolved server-side.
+        return False, ("The evidence image on this inspection could not be "
+                       "read. Record the inspection again with a readable "
+                       "image file.")
 
     ppm = float(scan["scale_ppm"])
     glyphs = scan["declared_glyph_count"] or None

@@ -286,3 +286,130 @@ naive_vs_calibrated.py  md5 f3a14d36b82dceda0cae784d850878c5
 
 **Totals: A 3/3 · B 9/9 · C 9 PASS 1 FAIL · D 7/7 · E 5/5 · F 6/6.**
 One failing item (C3), four recorded defects, none fixed.
+
+---
+
+# CHUNK 7b — scoped repairs, 2026-09-13
+
+Applied against the closed list only. Defect 4 (ID allocation race) and the
+phone-width overflow were **left alone as instructed**, and their notes above
+stand unchanged.
+
+## Pre-flight: no downscaling in the measurement path
+
+Checked before any edit, because the instruction was to stop and report if it
+existed. It does not.
+
+`app/` contains no `resize`, `thumbnail`, `reduce`, `draft`, `resample` or
+`INTER_*` call anywhere. `_crop_roi()` does `Image.open` → `convert("L")` →
+`crop()` → `np.asarray` / 255.0, so pixels reach the engine 1:1.
+
+The two `cv2.resize` calls in `lm_metrology_v7.py` are at line 1550 inside
+`make_glyphs()` (synthetic scene generation) and line 1792 inside
+`sampling_test()` (characterisation harness). Neither is reachable from the
+measurement path: the transitive call graph from `measure()` and
+`measure_with_category()` covers 78 functions and contains no `resize` and no
+`make_glyphs`. Nothing to report.
+
+## What changed
+
+| Item | Files |
+|---|---|
+| **1a** — imaging-library messages never surfaced | `app/service.py` |
+| **1b** — uploads validated by content, not extension | `app/main.py` |
+| **1c** — new `unreadable_image` state; error notice lifted out of the hidden block | `app/service.py`, `app/templates/results.html` |
+| **2** — non-finite declared PDP area refused | `app/main.py` |
+| **3** — in-flight "Measuring…" state | `app/static/roi.js`, `app/static/app.css`, `app/templates/results.html` |
+| test assertion corrected (see note) | `test_webapp.py` |
+
+**1a.** `measure_scan()` now splits its handler: `ValueError` (raised by this
+module, text written for an operator) is still shown; `OSError` (raised by
+Pillow, message embeds the absolute path) is replaced with a fixed sentence.
+Verified by corrupting a stored file and reading the redirect — the message is
+now *"The evidence image on this inspection could not be read. Record the
+inspection again with a readable image file."* and contains no path.
+
+**1b.** The upload handler now calls `Image.open(io.BytesIO(data)).verify()`
+inside a `try` **before** anything is written to disk and before
+`create_inspection()` is called, so a file that cannot be decoded never becomes
+an inspection and never lands in the upload directory.
+
+**1c.** `_measurement_view()` gained an `unreadable_image` state, ordered after
+`no_scale` so B4's behaviour is untouched. Its panel reads *"Evidence image
+cannot be read"* and offers only the action that can actually be taken. The
+`measure_error` notice was rendered **inside** the region-selection block,
+which is suppressed in exactly the cases that produce an error; it now sits
+above the measured panel, outside every conditional.
+
+**2.** `math.isfinite()` guard on `declared_pdp_area_cm2`, before the `<= 0`
+check, because `nan <= 0` is False and `inf <= 0` is False. Rejected at the
+form, nothing coerced.
+
+**3.** `roi.js` marks the measurement running on the form's `submit` event and
+the state is cleared by the response replacing the page. There is no
+`setTimeout`, no `setInterval` and no `requestAnimationFrame` in the file
+(verified with comments stripped), no `<progress>` element, no bar, no ring and
+no spinner. The pipeline's `04 MEASURE` gets `s-inflight`, a fourth class the
+**server never renders** — `_pipeline()` is unchanged and still emits only
+`pending`, `done` and `refused` from stored state. `s-inflight` has no
+animation, so `prefers-reduced-motion` still has nothing to suppress.
+
+## Re-verification
+
+| Step | Result |
+|---|---|
+| 1 — section A | **PASS.** `81 / 114 / 39 / 34 / 26` and `27`, all `0 failed`. All nine engine and demo modules still md5-identical to the original zip. |
+| 2 — `naive_vs_calibrated.py` | **PASS.** Byte-identical to the pristine pre-chunk-4 run (`cmp`, 6543 bytes, md5 `f3a14d36b82dceda0cae784d850878c5`). |
+| 3 — B1 | **PASS.** Blank + unticked → `PASS 0 · FAIL 0 · CANNOT_DETERMINE 6`. |
+| 3 — B2 | **PASS.** Ticked + operator ID → `PASS 0 · FAIL 6 · CANNOT_DETERMINE 0`. |
+| 3 — B4 | **PASS.** No px/mm → 0 rows in `measurements`, state `no_scale`, and no `\d+\.\d+ mm` anywhere in the MEASURED section. |
+| 3 — B5 | **PASS.** 75 cm² → `THRESHOLD_DISPUTED`, height `not measured`, threshold `not resolved`, and `{'page': [], 'pdf': [], 'docx': []}` for both `1.5` and `2.0`. |
+| 3 — B3, B6 (re-run anyway) | **PASS.** B6 reproduced its documented false positive identically (G3 note 1) — same two `exceptions` matches from `CharacterWidthCheck`, and `class="error"`, `--fail-bg`, `v-FAIL`, `color:red`, `toast`, `traceback` all absent from the panel. |
+| 4 — C3 | **PASS, was FAIL.** `.txt` renamed `.jpg` → HTTP 200, *"That file is not a readable image."*, **0 scan records created, 0 files written**, no traceback. Also refused: PDF bytes as `.png`, null bytes as `.jpeg`, HTML as `.bmp`. A real PNG is still accepted and still measures (`1.40 mm ± 0.17 mm (k=2)`). |
+| 4 — 1c behaviour | **PASS.** Healthy image + scale + no measurement → panel says "draw the region to measure, below" **and the selector is rendered**. Corrupt the stored file → state `unreadable_image`, panel says "Evidence image cannot be read", the false instruction is gone and no selector is offered. Same for a file that has been deleted. |
+| 5 — C6 | **PASS.** Report with no measurement: PDF 4358 B, DOCX 38151 B, no `Character height` section fabricated, no `mm ±` value present. |
+| 5 — F1–F6 | **PASS,** all six, unchanged from the acceptance pass. The digest is even identical (`47e07c2ffe03c50bc45e200a…`), confirming record content did not move. |
+| 6 — path grep | **PASS.** Returns nothing. |
+| 7 — `git status` | **PASS.** No `.env`, no key, no `*.db` tracked; only the six modified source files. |
+| — webapp suite | **PASS.** 175 checks, 0 failed. |
+| — FIX 2 | **PASS.** `inf`, `-inf`, `nan`, `NaN`, `1e400` all refused with *"Declared PDP area must be a finite number, in cm2."* and 0 scan records created. `40`, `0.5`, `1e9` still accepted. |
+| — CHANGE 3 | **PASS,** verified in Chromium on a real 20.8 MP measurement (9.7 s round trip). On submit: stage class `stage s-inflight`, stage text `04 MEASURE measuring...`, panel headline `Measuring...`, button disabled and relabelled. Background `rgb(232,236,241)` — distinct from pending, from done, and from refused (`rgb(243,240,231)`). `<progress>` count 0. After the response: `stage s-done`, headline `COMPLIANT -- meets the minimum height`, button re-enabled, `s-inflight` gone. |
+
+## Notes
+
+1. **One test assertion was corrected, not loosened.** `24.5` asserted that
+   `setInterval` does not appear in `roi.js`. The new comment block *documents*
+   that the file uses no timer, so the raw-text assertion matched the sentence
+   rather than any code. It now strips JS comments before checking, exactly as
+   the CSS assertions already did. Verified against code-only text:
+   `setTimeout`, `setInterval`, `requestAnimationFrame`, `progress` and
+   `spinner` are all absent.
+2. **`50%` appears twice in the rendered text of a measured page**, and is not a
+   compliance percentage. Both occurrences are the measurement convention —
+   *"50% of the ink-to-substrate intensity transition"* — from
+   `lm_legal_model`, which also appears in `inspection-record-sample.pdf`.
+   Recorded because a future regex sweep for `[0-9.]+ *%` will match it, and
+   the correct response is to leave it alone.
+3. **`scale_ppm` has the same non-finite gap that FIX 2 closed for PDP area.**
+   `inf` passes `float()` and `ppm <= 0`. It was not on the closed list and has
+   **not** been changed. Raising it rather than fixing it, per the rule for this
+   pass.
+4. The 20.8 MP synthetic used for the CHANGE 3 timing test is an upscale of the
+   small label, so its measured height (`17.63 mm`) is an artefact of that
+   upscale, not a real reading. It was used only to obtain a slow request.
+
+## Self-test counts after the repairs
+
+```
+legal model self-test:  81 checks, 0 failed
+capture self-test:     114 checks, 0 failed
+declarations self-test: 39 checks, 0 failed
+extract self-test:      34 checks, 0 failed
+report self-test:       26 checks, 0 failed
+integration:            27 checks, 0 failed
+webapp self-test:      175 checks, 0 failed
+
+naive_vs_calibrated.py  md5 f3a14d36b82dceda0cae784d850878c5 (byte-identical)
+```
+
+**C3 moves from FAIL to PASS. No other item's result changed.**

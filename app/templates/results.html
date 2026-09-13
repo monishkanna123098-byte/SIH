@@ -26,7 +26,7 @@
    and no crosses: two colours collapse three states (invariant 1). #}
 <ol class="pipeline">
   {% for st in v.pipeline %}
-  <li class="stage s-{{ st.state }}">
+  <li class="stage s-{{ st.state }}" data-stage="{{ st.name }}">
     <div class="st-head"><span class="st-n">{{ st.n }}</span>
       <span class="st-name">{{ st.name }}</span></div>
     {% for line in st.lines %}
@@ -90,7 +90,12 @@
 {% set m = v.measurement %}
 <h2>Character height &mdash; Rule 7(2)
     <span class="tier">[tier: MEASURED]</span></h2>
-<div class="measured">
+{# Outside the region-selection block on purpose: it used to live inside it,
+   which suppressed the message in exactly the cases that produced one. #}
+{% if request.query_params.get('measure_error') %}
+<div class="notice">{{ request.query_params.get('measure_error') }}</div>
+{% endif %}
+<div class="measured" id="measured-panel">
 {% if m.state == 'measured' %}
   <div class="m-headline">{{ m.headline }}</div>
   {% if m.stated != 'not measured' %}
@@ -156,6 +161,14 @@
     and record the inspection again with its px/mm value. This instrument does
     not infer the scale from the image.</p>
 
+{% elif m.state == 'unreadable_image' %}
+  <div class="m-headline">Evidence image cannot be read</div>
+  <p class="m-body">A file is attached to this inspection but it could not be
+    opened as an image, so there is no region to select and no height can be
+    measured from it.</p>
+  <p class="m-next">Next: record the inspection again with a readable image
+    file.</p>
+
 {% elif m.state == 'no_image' %}
   <div class="m-headline">No evidence image</div>
   <p class="m-body">There is no image on this inspection, so there is no region
@@ -180,9 +193,6 @@
     measures whatever it is handed: include the printed field, not the platen or
     the packet edge. Where you put the boundary changes the number, so the box
     is recorded with the measurement.</p>
-  {% if request.query_params.get('measure_error') %}
-  <div class="error">{{ request.query_params.get('measure_error') }}</div>
-  {% endif %}
   <div class="roi-stage">
     <img id="roi-img" src="/scan/{{ v.scan.inspection_id }}/image"
          data-natural-w="{{ m.image_w }}" data-natural-h="{{ m.image_h }}"
@@ -198,7 +208,7 @@
       <span class="hint">image pixels, of
         {{ m.image_w }}&times;{{ m.image_h }}</span>
     </div>
-    <button type="submit">Measure this region</button>
+    <button type="submit" id="measure-submit">Measure this region</button>
   </form>
 </div>
 <script src="/static/roi.js"></script>

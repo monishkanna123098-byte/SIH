@@ -10,6 +10,8 @@ engines. See app/service.py.
 """
 from __future__ import annotations
 
+import io
+import math
 import os
 import uuid
 from urllib.parse import quote
@@ -19,6 +21,7 @@ from fastapi import FastAPI, Form, Request, UploadFile, File
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from PIL import Image
 
 from . import auth, db, service
 
@@ -147,6 +150,12 @@ async def upload(request: Request,
             area = float(declared_pdp_area_cm2)
         except ValueError:
             return again("Declared PDP area must be a number, in cm2.")
+        # nan and inf both survive float(), and `area <= 0` is False for both
+        # (every nan comparison is False). An infinite panel area travelling
+        # down to the legal model is nonsense on a confident-looking path, so
+        # it is refused here rather than guessed at or coerced to a default.
+        if not math.isfinite(area):
+            return again("Declared PDP area must be a finite number, in cm2.")
         if area <= 0:
             return again("Declared PDP area must be greater than zero.")
 
@@ -192,6 +201,14 @@ async def upload(request: Request,
                          + ", ".join(sorted(ALLOWED_IMAGE)))
         data = await image.read()
         if data:
+            # The extension is a claim, not evidence. Verify the bytes actually
+            # decode as an image BEFORE anything is written or a scan record is
+            # created -- a file that cannot be opened must not become an
+            # inspection with an unusable evidence image attached to it.
+            try:
+                Image.open(io.BytesIO(data)).verify()
+            except Exception:
+                return again("That file is not a readable image.")
             name = f"{uuid.uuid4().hex}{ext}"
             os.makedirs(db.UPLOAD_DIR, exist_ok=True)
             with open(os.path.join(db.UPLOAD_DIR, name), "wb") as fh:
