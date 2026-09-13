@@ -23,8 +23,11 @@ httpx
 # -- a first-class input, not a fallback -- is unchanged.
 #
 # Automated declaration extraction (chunk 8). Needs LM_VISION_API_KEY set too;
-# with no key the button does not render.
+# with no key the button does not render. Install whichever provider the team
+# has a key for -- LM_VISION_PROVIDER selects it, and each SDK is imported
+# lazily, so neither needs to be present for the app to start.
 anthropic
+google-generativeai
 # The OCR cross-check. Also needs the `tesseract` binary on PATH
 # (Debian/Ubuntu: apt-get install tesseract-ocr). Absent -> the cross-check is
 # skipped entirely and every field stays verbatim_confirmed=None.

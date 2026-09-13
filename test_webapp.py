@@ -715,7 +715,8 @@ def main() -> int:
                      "opencv-python-headless", "pillow", "httpx"],
        str(_required))
     ck("25.5 chunk 8's dependencies are declared OPTIONAL",
-       [l for l in _req_lines if l not in _required] == ["anthropic", "pytesseract"],
+       [l for l in _req_lines if l not in _required]
+       == ["anthropic", "google-generativeai", "pytesseract"],
        str([l for l in _req_lines if l not in _required]))
     ck("25.6 the strip fetches nothing",
        "http://" not in _pipe_css and "https://" not in _pipe_css
@@ -1004,6 +1005,147 @@ def main() -> int:
     ck("33.10 the cross-check is optional in requirements",
        "pytesseract" in open("requirements.txt").read()
        and "OPTIONAL" in open("requirements.txt").read())
+
+    # ---- 34. the Gemini branch -------------------------------------------
+    # Mirrors 26-32 against the second provider. The backend is faked exactly
+    # as the Anthropic tests fake it: vision_extract takes an injected
+    # callable, so neither SDK is needed to exercise the path end to end.
+    ck("34.1 gemini is a recognised provider",
+       _vision.PROVIDER_GEMINI == "gemini"
+       and set(_vision.PROVIDERS) == {"anthropic", "gemini"},
+       str(_vision.PROVIDERS))
+    ck("34.2 its default model is gemini-2.0-flash",
+       _vision.DEFAULT_MODELS[_vision.PROVIDER_GEMINI] == "gemini-2.0-flash",
+       str(_vision.DEFAULT_MODELS))
+    ck("34.3 the anthropic default is unchanged",
+       _vision.DEFAULT_MODELS[_vision.PROVIDER_ANTHROPIC] == "claude-opus-5")
+
+    # configured() accepts either provider, and LM_VISION_MODEL still wins.
+    _saved_env = {k: os.environ.get(k) for k in
+                  (_vision.ENV_PROVIDER, _vision.ENV_KEY, _vision.ENV_MODEL)}
+
+    def _set_env(provider=None, key=None, model=None):
+        for name, val in ((_vision.ENV_PROVIDER, provider),
+                          (_vision.ENV_KEY, key), (_vision.ENV_MODEL, model)):
+            if val is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = val
+
+    _set_env(provider="gemini", key="not-a-real-key")
+    cfg = _vision.configured()
+    ck("34.4 configured() accepts gemini",
+       cfg == {"provider": "gemini", "model": "gemini-2.0-flash"}, str(cfg))
+    _set_env(provider="gemini", key="not-a-real-key", model="gemini-1.5-pro")
+    ck("34.5 LM_VISION_MODEL overrides the default",
+       _vision.configured()["model"] == "gemini-1.5-pro",
+       str(_vision.configured()))
+    _set_env(provider="anthropic", key="not-a-real-key")
+    ck("34.6 configured() still accepts anthropic",
+       _vision.configured() == {"provider": "anthropic", "model": "claude-opus-5"},
+       str(_vision.configured()))
+    _set_env(provider="openai", key="not-a-real-key")
+    ck("34.7 an unknown provider reports nothing configured",
+       _vision.configured() is None, str(_vision.configured()))
+    for k, v in _saved_env.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+    # make_call's guards, without touching either SDK.
+    for prov, why in (("openai", "unknown provider"), ("", "empty provider"),
+                      ("Gemini ", "provider is normalised by configured(), "
+                                  "not by make_call")):
+        raised = False
+        try:
+            _vision.make_call(prov, "not-a-real-key", "m")
+        except _vision.VisionUnavailable:
+            raised = True
+        ck(f"34.x make_call refuses {why}", raised, f"provider={prov!r}")
+    raised = False
+    try:
+        _vision.make_call("gemini", "", "gemini-2.0-flash")
+    except _vision.VisionUnavailable:
+        raised = True
+    ck("34.11 make_call refuses gemini with no key", raised)
+
+    # The full path, with a faked gemini backend.
+    with_backend(MACHINE, model="gemini-2.0-flash")
+    body = client.post("/extract-declarations",
+                       files={"image": ("l.png", png, "image/png")}).json()
+    ck("34.12 gemini extraction returns the six keys",
+       body["ok"] is True and set(body["values"]) == set(service.FIELD_KEYS),
+       str(body)[:150])
+    ck("34.13 a null stays null", body["values"]["consumer_care"] is None)
+    ck("34.14 the gemini model is reported", body["model"] == "gemini-2.0-flash")
+
+    with_backend(ALL_NULL, model="gemini-2.0-flash")
+    body = client.post("/extract-declarations",
+                       files={"image": ("l.png", png, "image/png")}).json()
+    ck("34.15 all nulls is a valid gemini outcome, not an error",
+       body["ok"] is True and all(v is None for v in body["values"].values()))
+
+    # All four failure branches behave the same as the anthropic ones.
+    for exc, expect, label in (
+            (_vision.VisionUnavailable("x"), "No extraction service", "unavailable"),
+            (_vision.VisionTransportError("timed out"), "Could not reach", "timeout/network"),
+            (service.ex.ExtractionError("garbage"), "unusable response", "unusable answer"),
+            (RuntimeError("boom"), "could not be used", "unexpected error")):
+        raising_backend(exc)
+        bb = client.post("/extract-declarations",
+                         files={"image": ("l.png", png, "image/png")}).json()
+        ck(f"34.y gemini {label} -> same handled message",
+           bb["ok"] is False and expect in bb["error"]
+           and "Traceback" not in bb["error"], str(bb)[:130])
+
+    # The review gate is provider-agnostic.
+    r = post_reviewed(client, machine=MACHINE, reviewed=set(), examined=True,
+                      model="gemini-2.0-flash", product="34 gemini unreviewed")
+    ck("34.20 the review gate applies to gemini output too",
+       r.status_code == 200 and "Review each declaration" in r.text,
+       f"HTTP {r.status_code}")
+    r = post_reviewed(client, machine=MACHINE, reviewed=set(service.FIELD_KEYS),
+                      examined=True, model="gemini-2.0-flash",
+                      product="34 gemini reviewed")
+    iid34 = r.headers["location"].rsplit("/", 1)[-1]
+    exts = {f.key: f.extractor for f in service.build_record(iid34).findings}
+    ck("34.21 a fully reviewed gemini inspection is allowed", r.status_code == 303)
+    ck("34.22 reviewed fields report manual:<username>, not the model",
+       all(v == "manual:officer" for v in exts.values()), str(exts))
+    r = post_reviewed(client, machine=MACHINE, reviewed={"net_quantity"},
+                      examined=False, model="gemini-2.0-flash",
+                      product="34 gemini provenance")
+    iid35 = r.headers["location"].rsplit("/", 1)[-1]
+    exts = {f.key: f.extractor for f in service.build_record(iid35).findings}
+    ck("34.23 untouched gemini values report vision:gemini-2.0-flash",
+       exts["name_and_address"] == "vision:gemini-2.0-flash",
+       str(exts["name_and_address"]))
+    ck("34.24 no doubled prefix on the gemini branch",
+       "vision:vision:" not in " ".join(exts.values()), str(exts))
+    restore_provider()
+
+    # The adapter's own invariants, for the new branch.
+    ck("34.25 the gemini SDK is imported lazily, not at module scope",
+       "import google.generativeai" in _vis_src
+       and "google" not in [getattr(n, "module", None) or
+                            (n.names[0].name if n.names else "")
+                            for n in __import__("ast").parse(_vis_src).body
+                            if isinstance(n, (__import__("ast").Import,
+                                              __import__("ast").ImportFrom))])
+    ck("34.26 the gemini branch parses no JSON",
+       "json.loads" not in _vis_code and "parse_vision_json" not in _vis_code)
+    ck("34.27 it holds no prompt text", "VISION_PROMPT" not in _vis_code)
+    ck("34.28 it disables retries", "retry=None" in _vis_src)
+    ck("34.29 it uses the same 30-second timeout",
+       "timeout=TIMEOUT_SECONDS" in _vis_src)
+    ck("34.30 it reuses the shared BMP/TIFF conversion",
+       _vis_src.count("_media_type(image_bytes)") == 2)
+    ck("34.31 no key material in the file",
+       not re.search(r"(sk-|AIza)[A-Za-z0-9_\-]{10,}", _vis_src))
+    ck("34.32 lm_extract.py was not touched",
+       "asserts_absent=False,        # see docstring. Never True here."
+       in open("lm_extract.py").read())
 
     print("=" * 74)
     for f in fails:

@@ -35,7 +35,14 @@ ENV_MODEL = "LM_VISION_MODEL"
 ENV_BASE_URL = "LM_VISION_BASE_URL"
 
 PROVIDER_ANTHROPIC = "anthropic"
-DEFAULT_MODEL = "claude-opus-5"
+PROVIDER_GEMINI = "gemini"
+PROVIDERS = (PROVIDER_ANTHROPIC, PROVIDER_GEMINI)
+
+DEFAULT_MODELS = {
+    PROVIDER_ANTHROPIC: "claude-opus-5",
+    PROVIDER_GEMINI: "gemini-2.0-flash",
+}
+DEFAULT_MODEL = DEFAULT_MODELS[PROVIDER_ANTHROPIC]      # kept: older callers
 DEFAULT_BASE_URL = "https://api.anthropic.com"
 
 # A hung request on stage is worse than a failed one.
@@ -77,10 +84,11 @@ def configured() -> Optional[dict]:
     if not key:
         return None
     provider = os.environ.get(ENV_PROVIDER, PROVIDER_ANTHROPIC).strip().lower()
-    if provider != PROVIDER_ANTHROPIC:
+    if provider not in PROVIDERS:
         return None
     return {"provider": provider,
-            "model": os.environ.get(ENV_MODEL, "").strip() or DEFAULT_MODEL}
+            "model": (os.environ.get(ENV_MODEL, "").strip()
+                      or DEFAULT_MODELS[provider])}
 
 
 def _media_type(data: bytes) -> tuple[bytes, str]:
@@ -102,16 +110,112 @@ def _media_type(data: bytes) -> tuple[bytes, str]:
     return buf.getvalue(), "image/png"
 
 
+def _gemini_call(api_key: str, model: str) -> Callable[[bytes, str], str]:
+    """The Gemini branch. Same contract as the Anthropic one.
+
+    Identical in every respect that matters: a 30-second hard timeout, no
+    retries, the raw response text returned as a string, no JSON parsing here,
+    and `lm_extract.VISION_PROMPT` passed through untouched by the caller. Its
+    auth, timeout and transport failures are mapped onto the same two
+    exceptions so all four failure branches in `/extract-declarations` behave
+    the same whichever provider is configured.
+
+    The SDK is imported HERE, not at module scope, so the app starts and every
+    test passes with `google-generativeai` absent.
+
+    Two things worth knowing, neither of them a defect:
+      * `genai.configure()` is process-global. This app configures one provider
+        once from the environment, so that is acceptable -- but a second
+        provider in the same process would clobber it.
+      * Gemini does not accept image/gif, which `_media_type` returns for a
+        GIF. Unreachable from this app: `ALLOWED_IMAGE` in main.py has no
+        `.gif`. If GIF uploads are ever allowed, convert it to PNG here the way
+        `_media_type` already converts BMP and TIFF.
+    """
+    try:
+        import google.generativeai as genai
+        from google.generativeai import types as gtypes
+        from google.api_core import exceptions as gexc
+    except ImportError as exc:                   # pragma: no cover - env dependent
+        raise VisionUnavailable(
+            "the google-generativeai SDK is not installed") from exc
+
+    genai.configure(api_key=api_key)
+    client = genai.GenerativeModel(model_name=model)
+
+    def call(image_bytes: bytes, prompt: str) -> str:
+        payload, media = _media_type(image_bytes)
+        try:
+            resp = client.generate_content(
+                [{"mime_type": media, "data": payload}, prompt],
+                # retry=None is how this SDK is told not to retry. A retry
+                # doubles the wait with an officer standing at the bench.
+                request_options=gtypes.RequestOptions(
+                    timeout=TIMEOUT_SECONDS, retry=None),
+            )
+        except gexc.DeadlineExceeded as exc:
+            raise VisionTransportError(
+                f"the extraction service did not respond within "
+                f"{int(TIMEOUT_SECONDS)} seconds") from exc
+        except gexc.RetryError as exc:
+            raise VisionTransportError(
+                f"the extraction service did not respond within "
+                f"{int(TIMEOUT_SECONDS)} seconds") from exc
+        except (gexc.Unauthenticated, gexc.PermissionDenied) as exc:
+            raise VisionTransportError(
+                "the extraction service rejected the configured credentials") from exc
+        except gexc.ResourceExhausted as exc:
+            raise VisionTransportError(
+                "the extraction service is rate limiting this key") from exc
+        except gexc.ServiceUnavailable as exc:
+            raise VisionTransportError(
+                "the extraction service could not be reached") from exc
+        except gexc.GoogleAPICallError as exc:
+            # Status code only. Provider error bodies can echo request content.
+            raise VisionTransportError(
+                f"the extraction service returned status "
+                f"{getattr(exc, 'code', 'unknown')}") from exc
+        except (gtypes.BlockedPromptException,
+                gtypes.StopCandidateException) as exc:
+            raise VisionTransportError(
+                "the extraction service declined to process this image") from exc
+        except OSError as exc:
+            raise VisionTransportError(
+                "the extraction service could not be reached") from exc
+
+        feedback = getattr(resp, "prompt_feedback", None)
+        if getattr(feedback, "block_reason", None):
+            raise VisionTransportError(
+                "the extraction service declined to process this image")
+
+        # Assembled from the parts rather than via `resp.text`, which raises
+        # when a response carries no usable part. An empty string here is not
+        # an error: `parse_vision_json` owns that decision and already raises
+        # ExtractionError on an empty response.
+        out = []
+        for cand in (getattr(resp, "candidates", None) or []):
+            content = getattr(cand, "content", None)
+            for part in (getattr(content, "parts", None) or []):
+                text = getattr(part, "text", "")
+                if text:
+                    out.append(text)
+        return "".join(out)
+
+    return call
+
+
 def make_call(provider: str, api_key: str, model: str) -> Callable[[bytes, str], str]:
     """Return `call(image_bytes, prompt) -> raw response text`.
 
     The returned callable is what `lm_extract.vision_extract` takes. That
     module never learns which provider this is, and never imports one.
     """
-    if provider != PROVIDER_ANTHROPIC:
-        raise VisionUnavailable(f"unsupported provider {provider!r}")
     if not api_key:
         raise VisionUnavailable("no API key configured")
+    if provider == PROVIDER_GEMINI:
+        return _gemini_call(api_key, model)
+    if provider != PROVIDER_ANTHROPIC:
+        raise VisionUnavailable(f"unsupported provider {provider!r}")
 
     try:
         import anthropic
