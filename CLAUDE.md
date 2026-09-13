@@ -111,6 +111,15 @@ an integration easier.
 | `test_integration.py` | Cross-module regression | 27 |
 | `naive_vs_calibrated.py` | The demo beat. Runs without a camera | — |
 | `demo_script.py` | Live rig sequence. **Never met a camera** | — |
+| `app/service.py` | The only module permitted to import `lm_*` | — |
+| `app/vision.py` | Vision provider adapter. The only module importing an SDK | — |
+| `app/main.py` | FastAPI routes. Calls `service`, never `lm_*` | — |
+| `test_webapp.py` | The web application, end to end | 227 |
+
+The OCR cross-check needs the **`tesseract` binary** on PATH, not just
+`pytesseract`. Without it the cross-check silently skips and every field stays
+`verbatim_confirmed=None` — correct behaviour, but the differentiator is
+invisible. Debian/Ubuntu: `apt-get install tesseract-ocr`.
 
 Run every self-test before and after any change:
 ```bash
@@ -118,7 +127,11 @@ for f in lm_legal_model lm_capture lm_declarations lm_extract lm_report; do
   python3 $f.py | grep -i "self-test"
 done
 python3 test_integration.py | tail -3
+python3 test_webapp.py | tail -3
 ```
+
+Expected: **81 / 114 / 39 / 34 / 26**, **27** integration checks and **227**
+webapp checks, all `0 failed`.
 
 ---
 
@@ -132,15 +145,26 @@ The build was split into chunks. This is what they were and what happened.
 | 1 | `lm_declarations.py` — Rule 6(1) checks | done, 39 checks |
 | 2 | `lm_extract.py` — image/officer → declarations | done, 34 checks |
 | 3 | `lm_report.py` — record, PDF + DOCX, hash | done, 26 checks |
-| 4 | **Web app (FastAPI). NOT BUILT — start here** | — |
-| 5 | Metrology wired into the app, pre-flight gates surfaced | not started |
-| 6 | Pipeline view: CAPTURE → CALIBRATE → EXTRACT → MEASURE → ADJUDICATE | not started |
+| 4 | Web app (FastAPI) — login, upload, three tiers, PDF/DOCX, history, dashboard | **built** |
+| 5 | Metrology wired into the app, pre-flight gates surfaced | **built** |
+| 6 | Pipeline view: CAPTURE → CALIBRATE → EXTRACT → MEASURE → ADJUDICATE | **built** |
+| 7a | Acceptance pass — adversarial verification | done, see `ACCEPTANCE-2026-09-13.md` |
+| 7b | Scoped repairs from that pass | done, see `ACCEPTANCE-2026-09-13.md` |
+| 8 | Vision extraction, the review gate, the OCR cross-check | **built** |
 | 7 | Rehearsal, 14 Sep. No new code that day | — |
+
+**Chunks 4, 5, 6 and 8 are built and self-tested. Do not rebuild them.** The
+web application lives in `app/`; run `python3 test_webapp.py` (227 checks)
+before assuming otherwise.
 
 Also done, outside the chunk plan: a full code audit (`AUDIT-2026-09-12.md`),
 four bugs fixed in `demo_script.py`, and `naive_vs_calibrated.py` — the demo
-beat, which runs with no camera and carries the differentiator on its own if
-chunks 4–6 never land.
+beat, which runs with no camera and carries the differentiator on its own.
+
+Two defects are recorded in `ACCEPTANCE-2026-09-13.md` and **deliberately left
+unfixed**: the phone-width CSS overflow (the strip is fine at 700px) and the
+read-then-write inspection-ID race (not reproducible at 40 concurrent). Do not
+"fix" either without reading why they were left.
 
 If you fall behind, cut from the bottom: 6 first, then the dashboard inside 4,
 then role-based access. **Chunks 1, 3 and 5 are never cut — they are the
@@ -148,7 +172,10 @@ differentiator.**
 
 ---
 
-## What to build (chunk 4 onward)
+## The web application — what it is, and the shape it must keep
+
+**Built** (chunks 4, 5, 6 and 8). This section describes what exists and the
+constraints it is held to, not work outstanding.
 
 A **single local FastAPI app** — not a separate frontend and backend. It
 imports the modules directly; no HTTP between them, no CORS, no hosting.

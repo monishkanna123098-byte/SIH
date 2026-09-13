@@ -107,10 +107,22 @@ This is a geometric fact, not a claim about anyone's software.
 The measurement, statutory, declaration, extraction and report layers are
 built and self-tested. **No part of this has met a camera.**
 
-The web application (chunks 4, 5 and 6) is built: login, upload, a five-stage
-pipeline strip, results in three tiers, region selection, scale-referenced
-character-height measurement with its uncertainty, PDF/DOCX export, history
-with search, and a counts-only dashboard.
+The web application (chunks 4, 5, 6 and 8) is built: login, upload, a
+five-stage pipeline strip, results in three tiers, region selection,
+scale-referenced character-height measurement with its uncertainty, PDF/DOCX
+export, history with search, and a counts-only dashboard.
+
+**Automated extraction** reads the six Rule 6(1) declarations from an uploaded
+image, and is gated behind a review step. Every machine-filled field is marked
+`read from image — unconfirmed`; a declaration the model could not read shows
+`not found in image` rather than an empty box; and the coverage checkbox — the
+only thing that can turn a blank into a violation — stays disabled until the
+officer has edited or confirmed all six. That gate is enforced server-side, not
+just in the browser. An optional OCR cross-check marks any value no OCR engine
+on the same image saw, which the declaration layer downgrades to
+CANNOT_DETERMINE before any format check runs. With no API key configured the
+feature is simply absent and the manual path — a first-class input, not a
+fallback — is unchanged.
 
 Still true, and unchanged by any of it: **no part of this has met a camera.**
 The scale factor is operator-entered from a session the rig has not yet run.
