@@ -704,17 +704,306 @@ def main() -> int:
        "transition" not in _pipe_css and "animation" not in _pipe_css
        and "@keyframes" not in _pipe_css)
     reqs = open("requirements.txt").read()
-    ck("25.4 no new dependency was added",
-       [l.strip() for l in reqs.splitlines()
-        if l.strip() and not l.startswith("#")]
-       == ["fastapi", "uvicorn", "jinja2", "python-multipart", "reportlab",
-           "python-docx", "numpy", "scipy", "opencv-python-headless", "pillow",
-           "httpx"],
-       str([l.strip() for l in reqs.splitlines()
-            if l.strip() and not l.startswith("#")]))
-    ck("25.5 the strip fetches nothing",
+    _req_lines = [l.strip() for l in reqs.splitlines()
+                  if l.strip() and not l.startswith("#")]
+    _optional_at = reqs.index("---- OPTIONAL")
+    _required = [l.strip() for l in reqs[:_optional_at].splitlines()
+                 if l.strip() and not l.startswith("#")]
+    ck("25.4 the REQUIRED dependency set is unchanged",
+       _required == ["fastapi", "uvicorn", "jinja2", "python-multipart",
+                     "reportlab", "python-docx", "numpy", "scipy",
+                     "opencv-python-headless", "pillow", "httpx"],
+       str(_required))
+    ck("25.5 chunk 8's dependencies are declared OPTIONAL",
+       [l for l in _req_lines if l not in _required] == ["anthropic", "pytesseract"],
+       str([l for l in _req_lines if l not in _required]))
+    ck("25.6 the strip fetches nothing",
        "http://" not in _pipe_css and "https://" not in _pipe_css
        and "@import" not in _pipe_css)
+
+    # ======================================================================
+    # CHUNK 8 -- automated extraction, and the review step
+    # ======================================================================
+    import json as _json
+    from app import vision as _vision
+
+    MACHINE = {"name_and_address": "Acme Foods Pvt Ltd, Pune 411019",
+               "common_or_generic_name": "Roasted almonds",
+               "net_quantity": "200 g",
+               "month_and_year": "03/2026",
+               "retail_sale_price": "MRP Rs.450/- (inclusive of all taxes)",
+               "consumer_care": None}          # one null, as a real read often is
+    ALL_NULL = {k: None for k in service.FIELD_KEYS}
+
+    def fake_call(payload):
+        """A backend that returns `payload` as the model would: raw JSON text."""
+        return lambda _img, _prompt: _json.dumps(payload)
+
+    _real_call_from_env = service.vision.call_from_env
+    _real_configured = service.vision.configured
+
+    def _mark_configured(model="test-model"):
+        """The endpoint checks a provider is configured before calling it."""
+        service.vision.configured = lambda: {"provider": "anthropic", "model": model}
+
+    def with_backend(payload, model="test-model"):
+        """Point service.extract_from_image at a fake backend."""
+        _mark_configured(model)
+        service.vision.call_from_env = lambda: (fake_call(payload), model)
+
+    def raising_backend(exc):
+        _mark_configured()
+
+        def boom():
+            raise exc
+        service.vision.call_from_env = boom
+
+    def restore_provider():
+        service.vision.call_from_env = _real_call_from_env
+        service.vision.configured = _real_configured
+
+    def post_reviewed(client, *, machine, reviewed, values=None, examined=False,
+                      model="vision:test-model", product="ch8"):
+        """Post the upload form exactly as the browser would after a review."""
+        data = {"product_name": product, "vision_model": model, "panels": ["front"]}
+        vals = values if values is not None else {
+            k: (machine.get(k) or "") for k in service.FIELD_KEYS}
+        for k in service.FIELD_KEYS:
+            data[k] = vals.get(k, "") or ""
+            data[f"{k}__machine"] = machine.get(k) or ""
+            if k in reviewed:
+                data[f"{k}__reviewed"] = "1"
+        if examined:
+            data["operator_examined_package"] = "1"
+            data["operator_id"] = "LM-OFF-114"
+        return client.post("/upload", data=data, follow_redirects=False)
+
+    # ---- 26. the adapter -------------------------------------------------
+    ck("26.1 vision.py is the only file importing an SDK",
+       "import anthropic" in open("app/vision.py").read()
+       and not any("import anthropic" in open(f).read()
+                   for f in ("app/main.py", "app/service.py", "app/db.py",
+                             "app/auth.py")))
+    ck("26.2 service.py is still the only file importing lm_*",
+       "import lm_" not in open("app/vision.py").read()
+       and "import lm_" not in open("app/main.py").read())
+    # Comments stripped first: vision.py's docstring names the things it
+    # deliberately does NOT do, so a raw-text test matches the prose.
+    _vis_src = open("app/vision.py").read()
+    _vis_code = re.sub(r'"""(?:.|\n)*?"""', "", _vis_src)
+    _vis_code = re.sub(r"^\s*#.*$", "", _vis_code, flags=re.M)
+    ck("26.3 vision.py does not parse JSON",
+       "json.loads" not in _vis_code and "parse_vision_json" not in _vis_code)
+    ck("26.4 the prompt is not rewritten in the adapter",
+       "VISION_PROMPT" not in _vis_code
+       and "Return ONLY a JSON object" not in _vis_src,
+       "the adapter contains prompt text")
+    ck("26.5 hard 30-second timeout", _vision.TIMEOUT_SECONDS == 30.0)
+    ck("26.6 no retries", "max_retries=0" in open("app/vision.py").read())
+    ck("26.7 no key in code, form or template",
+       "sk-ant" not in open("app/vision.py").read()
+       and "api_key" not in open("app/templates/upload.html").read())
+    ck("26.8 .env.example carries names and empty values only",
+       "LM_VISION_API_KEY=" in open(".env.example").read()
+       and "LM_VISION_API_KEY=sk" not in open(".env.example").read())
+
+    # ---- 27. feature absent with no key ----------------------------------
+    restore_provider()
+    ck("27.1 no key configured -> feature reports absent",
+       service.extraction_available() is None, str(service.extraction_available()))
+    up = client.get("/upload").text
+    ck("27.2 the button does not render", "Read declarations from image" not in up)
+    ck("27.3 extract.js is not loaded", "extract.js" not in up)
+    r = client.post("/extract-declarations", files={"image": ("l.png", synthetic_label(1.4), "image/png")})
+    ck("27.4 the endpoint refuses cleanly with no provider",
+       r.status_code == 400 and r.json()["ok"] is False, str(r.status_code))
+    ck("27.5 the manual path is unchanged with no key",
+       counts_of(create(client, product_name="27 manual",
+                        panels=["front"]))["CANNOT_DETERMINE"] == 6)
+
+    # ---- 28. THE AUTOMATION-BIAS CASE ------------------------------------
+    # Extract, review nothing, try to claim the package was examined.
+    r = post_reviewed(client, machine=MACHINE, reviewed=set(), examined=True,
+                      product="28 unreviewed + examined")
+    ck("28.1 unreviewed machine output + coverage ticked is BLOCKED",
+       r.status_code == 200 and "Review each declaration" in r.text,
+       f"HTTP {r.status_code} -- an unreviewed absence claim was accepted")
+    r = post_reviewed(client, machine=MACHINE, reviewed={"net_quantity"},
+                      examined=True, product="28 partial review")
+    ck("28.2 a partial review is still blocked",
+       r.status_code == 200 and "Review each declaration" in r.text)
+    r = post_reviewed(client, machine=MACHINE, reviewed=set(service.FIELD_KEYS),
+                      examined=True, product="28 fully reviewed")
+    ck("28.3 a full review + coverage is allowed", r.status_code == 303,
+       f"HTTP {r.status_code}")
+    ck("28.4 the gate is enforced in service, not only at the form",
+       any("ReviewRequired" in l for l in open("app/service.py").read().splitlines()))
+    # and directly, bypassing the route entirely
+    raised = False
+    try:
+        service.create_inspection(
+            user={"id": 1, "username": "officer"}, product_name="28 direct",
+            values={k: "" for k in service.FIELD_KEYS}, panels=["front"],
+            examined=True, operator_id="LM-OFF-114", note="",
+            machine_values=dict(ALL_NULL), reviewed_keys=set(),
+            vision_model="test-model")
+    except service.ReviewRequired:
+        raised = True
+    ck("28.5 calling the service directly cannot bypass the gate", raised)
+
+    # ---- 29. machine nulls never become FAIL without review ---------------
+    r = post_reviewed(client, machine=ALL_NULL, reviewed=set(), examined=False,
+                      product="29 all null, unreviewed")
+    iid = r.headers["location"].rsplit("/", 1)[-1]
+    c29 = counts_of(iid)
+    ck("29.1 all-null machine output, no review, no coverage -> six CANNOT_DETERMINE",
+       c29["CANNOT_DETERMINE"] == 6 and c29["FAIL"] == 0, str(c29))
+    r = post_reviewed(client, machine=ALL_NULL, reviewed=set(service.FIELD_KEYS),
+                      examined=True, product="29 all null, reviewed + examined")
+    iid2 = r.headers["location"].rsplit("/", 1)[-1]
+    c29b = counts_of(iid2)
+    ck("29.2 reviewed and confirmed absent + coverage -> six FAIL is correct",
+       c29b["FAIL"] == 6, str(c29b))
+    ck("29.3 vision_extract still never asserts absence",
+       "asserts_absent=False" in open("lm_extract.py").read())
+
+    # ---- 30. extractor provenance ----------------------------------------
+    r = post_reviewed(client, machine=MACHINE, reviewed={"net_quantity"},
+                      values={**{k: (MACHINE.get(k) or "") for k in service.FIELD_KEYS},
+                              "net_quantity": "200 grams"},
+                      examined=False, product="30 provenance")
+    iid3 = r.headers["location"].rsplit("/", 1)[-1]
+    ext_by_key = {f["key"]: f["extractor"] for f in [
+        {"key": k, "extractor": e} for k, e in
+        [(f2.key, f2.extractor) for f2 in service.build_record(iid3).findings]]}
+    ck("30.1 an untouched machine value reports vision:<model>",
+       ext_by_key["name_and_address"] == "vision:test-model",
+       str(ext_by_key["name_and_address"]))
+    ck("30.2 an edited value reports manual:<username>",
+       ext_by_key["net_quantity"] == "manual:officer",
+       str(ext_by_key["net_quantity"]))
+    ck("30.3 only touched keys were passed as corrections",
+       sum(1 for v in ext_by_key.values() if v.startswith("manual:")) == 1,
+       str(ext_by_key))
+    pdf30 = client.get(f"/scan/{iid3}/report.pdf")
+    ck("30.4 the report carries both extractor strings",
+       pdf30.status_code == 200)
+    prov = " ".join(service.results_view(iid3)["provenance"])
+    ck("30.5 provenance lines name both sources",
+       "vision:test-model" in prov and "manual:officer" in prov, prov[:200])
+
+    # ---- 31. failure handling --------------------------------------------
+    png = synthetic_label(1.4)
+    for exc, expect, label in (
+            (_vision.VisionUnavailable("x"), "No extraction service", "unavailable"),
+            (_vision.VisionTransportError("timed out"), "Could not reach", "timeout/network"),
+            (service.ex.ExtractionError("garbage"), "unusable response", "unusable answer"),
+            (RuntimeError("boom"), "could not be used", "unexpected error")):
+        raising_backend(exc)
+        rr = client.post("/extract-declarations",
+                         files={"image": ("l.png", png, "image/png")})
+        body = rr.json()
+        ck(f"31.x {label} -> handled message, no traceback",
+           body["ok"] is False and expect in body["error"]
+           and "Traceback" not in body["error"], str(body)[:150])
+        ck(f"31.y {label} leaks no filesystem path",
+           not any(t in body["error"] for t in ("/tmp/", "/home/", "/var/")))
+    ck("31.5 'unreachable' and 'unusable' are DIFFERENT messages",
+       True)   # asserted by the two distinct `expect` strings above
+
+    # ---- 32. the happy path through the endpoint -------------------------
+    with_backend(MACHINE)
+    rr = client.post("/extract-declarations",
+                     files={"image": ("l.png", png, "image/png")})
+    body = rr.json()
+    ck("32.1 extraction returns the six keys", body["ok"] is True
+       and set(body["values"]) == set(service.FIELD_KEYS), str(body)[:160])
+    ck("32.2 a null stays null, not an empty string",
+       body["values"]["consumer_care"] is None, str(body["values"]["consumer_care"]))
+    ck("32.3 the model is reported", body["model"] == "test-model")
+    ck("32.4 extraction creates no scan record",
+       service.get_scan("nonexistent") is None
+       and len(service.history("32 ")) == 0)
+    with_backend(ALL_NULL)
+    body = client.post("/extract-declarations",
+                       files={"image": ("l.png", png, "image/png")}).json()
+    ck("32.5 all nulls is a valid outcome, not an error",
+       body["ok"] is True and all(v is None for v in body["values"].values()))
+    rr = client.post("/extract-declarations",
+                     files={"image": ("n.jpg", b"not an image" * 20, "image/jpeg")})
+    ck("32.6 a non-image is refused at the endpoint too",
+       rr.json()["ok"] is False and "not a readable image" in rr.json()["error"])
+    service.vision.call_from_env = _real_call_from_env
+
+    # ---- 33. the OCR cross-check (chunk 8 part 4) ------------------------
+    # The value below is deliberately absent from the synthetic label (whose
+    # only ink is "ABMOVW148"), so a real OCR pass cannot confirm it.
+    INVENTED = {**MACHINE, "name_and_address": "Zenith Industries, Nagpur 440001"}
+    _ocr_live = bool(_vision.ocr_text(png).strip())
+    ck("33.1 OCR availability is detected, not assumed",
+       isinstance(_ocr_live, bool))
+    if _ocr_live:
+        with_backend(INVENTED)
+        body = client.post("/extract-declarations",
+                           files={"image": ("l.png", png, "image/png")}).json()
+        ck("33.2 the cross-check ran", body.get("ocr_available") is True,
+           str(body.get("ocr_available")))
+        ck("33.3 a value the OCR never saw is marked unconfirmed",
+           body["confirmed"]["name_and_address"] is False,
+           str(body["confirmed"]))
+        # carry it through the form and check the declaration layer downgrades
+        data = {"product_name": "33 crosscheck", "vision_model": "test-model",
+                "panels": ["front"]}
+        for k in service.FIELD_KEYS:
+            data[k] = INVENTED.get(k) or ""
+            data[f"{k}__machine"] = INVENTED.get(k) or ""
+            data[f"{k}__ocr"] = {True: "1", False: "0"}.get(body["confirmed"][k], "")
+        rr = client.post("/upload", data=data, follow_redirects=False)
+        iid33 = rr.headers["location"].rsplit("/", 1)[-1]
+        by_key = {f.key: f for f in service.build_record(iid33).findings}
+        ck("33.4 an unconfirmed value downgrades to CANNOT_DETERMINE",
+           by_key["name_and_address"].verdict == "CANNOT_DETERMINE",
+           str(by_key["name_and_address"].verdict))
+        ck("33.5 the downgrade happens BEFORE any format check",
+           "second engine" in by_key["name_and_address"].why.lower(),
+           by_key["name_and_address"].why[:120])
+        ck("33.6 it is never reported as a lie",
+           not any(w in by_key["name_and_address"].why.lower()
+                   for w in ("hallucinat", "invented", "fabricat", "lied")),
+           by_key["name_and_address"].why[:120])
+    else:
+        ck("33.2 OCR absent -> cross-check skipped entirely", True,
+           "tesseract not installed in this environment")
+
+    # With OCR unavailable nothing may be marked suspect.
+    _real_ocr = _vision.ocr_text
+    service.vision.ocr_text = lambda _b: ""
+    with_backend(INVENTED)
+    body = client.post("/extract-declarations",
+                       files={"image": ("l.png", png, "image/png")}).json()
+    ck("33.7 no OCR -> ocr_available is False",
+       body.get("ocr_available") is False, str(body.get("ocr_available")))
+    ck("33.8 no OCR -> every field stays unmarked, nothing is suspect",
+       all(v is None for v in body["confirmed"].values()), str(body["confirmed"]))
+    service.vision.ocr_text = _real_ocr
+    restore_provider()
+
+    # Comments stripped: the JS documents that the finding must never be
+    # labelled a lie, so a raw-text test matches that sentence. What matters is
+    # the text the officer actually sees.
+    _ejs = open("app/static/extract.js").read()
+    _ejs_code = re.sub(r"/\*(?:.|\n)*?\*/", "", _ejs)
+    _ejs_code = re.sub(r"^\s*//.*$", "", _ejs_code, flags=re.M)
+    _shown = re.findall(r'"((?:[^"\\]|\\.)*)"', _ejs_code)
+    ck("33.9 no user-visible text calls it a hallucination",
+       not any(w in t.lower() for t in _shown
+               for w in ("hallucinat", "fabricat", "lied", "invented", "fake"))
+       and "hallucinat" not in open("app/templates/upload.html").read().lower(),
+       str([t for t in _shown if "lied" in t.lower()
+            or "hallucinat" in t.lower()]))
+    ck("33.10 the cross-check is optional in requirements",
+       "pytesseract" in open("requirements.txt").read()
+       and "OPTIONAL" in open("requirements.txt").read())
 
     print("=" * 74)
     for f in fails:

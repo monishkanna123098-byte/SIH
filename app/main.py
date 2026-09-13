@@ -18,7 +18,8 @@ from urllib.parse import quote
 from typing import Optional
 
 from fastapi import FastAPI, Form, Request, UploadFile, File
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+                               RedirectResponse)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from PIL import Image
@@ -97,7 +98,8 @@ def upload_form(request: Request):
                    fields=service.declaration_fields(),
                    panels=service.PANELS, categories=service.CATEGORIES,
                    commodity_classes=service.COMMODITY_CLASSES,
-                   min_ppm=service.MIN_PX_PER_MM, values={}, form={})
+                   min_ppm=service.MIN_PX_PER_MM, values={}, form={},
+                   extraction=service.extraction_available())
 
 
 @app.post("/upload", response_class=HTMLResponse)
@@ -122,12 +124,23 @@ async def upload(request: Request,
     panels = [p for p in form.getlist("panels") if p in service.PANELS]
     examined = form.get("operator_examined_package") is not None
 
+    # Automated-extraction state, carried on the form so a validation error
+    # cannot silently downgrade machine values into officer-typed ones.
+    vision_model = (form.get("vision_model") or "").strip()
+    used_vision = bool(vision_model)
+    machine_values = ({k: (form.get(f"{k}__machine") or "") for k in service.FIELD_KEYS}
+                      if used_vision else None)
+    machine_confirmed = ({k: (form.get(f"{k}__ocr") or "") for k in service.FIELD_KEYS}
+                         if used_vision else None)
+    reviewed_keys = {k for k in service.FIELD_KEYS if form.get(f"{k}__reviewed")}
+
     def again(error: str):
         return _render(request, "upload.html", user,
                        fields=service.declaration_fields(),
                        panels=service.PANELS, categories=service.CATEGORIES,
                        commodity_classes=service.COMMODITY_CLASSES,
                        min_ppm=service.MIN_PX_PER_MM,
+                       extraction=service.extraction_available(),
                        values=values, error=error,
                        form={"product_name": product_name,
                              "declared_category": declared_category,
@@ -139,7 +152,11 @@ async def upload(request: Request,
                              "scale_ppm": scale_ppm,
                              "scale_artifact": scale_artifact,
                              "scale_artifact_tier": scale_artifact_tier,
-                             "panels": panels, "examined": examined})
+                             "panels": panels, "examined": examined,
+                             "vision_model": vision_model,
+                             "machine": machine_values or {},
+                             "ocr": machine_confirmed or {},
+                             "reviewed": sorted(reviewed_keys)})
 
     if not product_name.strip():
         return again("Product name is required.")
@@ -193,6 +210,15 @@ async def upload(request: Request,
         return again("Operator ID is required when you confirm you examined "
                      "the physical package.")
 
+    # The automation-bias gate. A model's silence must not become an accusation
+    # because the checkbox happened to be next to it. service.create_inspection
+    # raises ReviewRequired independently -- this is the friendly half.
+    if used_vision and examined:
+        unreviewed = [k for k in service.FIELD_KEYS if k not in reviewed_keys]
+        if unreviewed:
+            return again("Review each declaration before stating you examined "
+                         "the package.")
+
     image_path = None
     if image is not None and image.filename:
         ext = os.path.splitext(image.filename)[1].lower()
@@ -215,15 +241,85 @@ async def upload(request: Request,
                 fh.write(data)
             image_path = name
 
-    inspection_id = service.create_inspection(
-        user=user, product_name=product_name, values=values, panels=panels,
-        examined=examined, operator_id=operator_id, note=coverage_note,
-        declared_category=declared_category, declared_pdp_area_cm2=area,
-        image_path=image_path, scale_ppm=ppm, scale_artifact=scale_artifact,
-        scale_artifact_tier=scale_artifact_tier,
-        declared_commodity_class=declared_commodity_class,
-        declared_glyph_count=glyphs)
+    try:
+        inspection_id = service.create_inspection(
+            user=user, product_name=product_name, values=values, panels=panels,
+            examined=examined, operator_id=operator_id, note=coverage_note,
+            declared_category=declared_category, declared_pdp_area_cm2=area,
+            image_path=image_path, scale_ppm=ppm, scale_artifact=scale_artifact,
+            scale_artifact_tier=scale_artifact_tier,
+            declared_commodity_class=declared_commodity_class,
+            declared_glyph_count=glyphs, machine_values=machine_values,
+            reviewed_keys=reviewed_keys, vision_model=vision_model,
+            machine_confirmed=machine_confirmed)
+    except service.ReviewRequired as exc:
+        return again(str(exc))
     return RedirectResponse(f"/scan/{inspection_id}", status_code=303)
+
+
+@app.post("/extract-declarations")
+async def extract_declarations(request: Request,
+                               image: UploadFile | None = File(None)):
+    """Run the configured vision provider over one image and return its values.
+
+    Returns JSON, fills the form in place, and creates NOTHING. No scan record,
+    no finding, no absence claim -- the officer reviews the six values first.
+    Every failure below leaves the manual path usable and the upload intact.
+    """
+    user = auth.current_user(request)
+    if user is None:
+        return JSONResponse({"ok": False, "error": "Your session has expired. "
+                             "Sign in again."}, status_code=401)
+    if service.extraction_available() is None:
+        return JSONResponse({"ok": False, "error": "No extraction service is "
+                             "configured."}, status_code=400)
+    if image is None or not image.filename:
+        return JSONResponse({"ok": False, "error": "Choose an image first."},
+                            status_code=400)
+    ext = os.path.splitext(image.filename)[1].lower()
+    if ext not in ALLOWED_IMAGE:
+        return JSONResponse({"ok": False, "error": f"Unsupported image type "
+                             f"'{ext}'."}, status_code=400)
+    data = await image.read()
+    if not data:
+        return JSONResponse({"ok": False, "error": "That file is empty."},
+                            status_code=400)
+    try:
+        Image.open(io.BytesIO(data)).verify()
+    except Exception:
+        return JSONResponse({"ok": False,
+                             "error": "That file is not a readable image."},
+                            status_code=400)
+
+    try:
+        result = service.extract_from_image(data)
+    except service.vision.VisionUnavailable:
+        return JSONResponse({"ok": False, "error": "No extraction service is "
+                             "configured."}, status_code=400)
+    except service.vision.VisionTransportError as exc:
+        # Could not reach it, or it timed out. Message names the remedy.
+        return JSONResponse({"ok": False, "error":
+                             f"Could not reach the extraction service ({exc}). "
+                             f"Enter the declarations manually."},
+                            status_code=502)
+    except service.ex.ExtractionError:
+        # It ANSWERED, with something unusable. Deliberately a different
+        # message from the one above: six CANNOT_DETERMINE caused by a broken
+        # pipeline must not read as a bad photograph.
+        return JSONResponse({"ok": False, "error":
+                             "The extraction service returned an unusable "
+                             "response. Enter the declarations manually."},
+                            status_code=502)
+    except Exception:
+        # Nothing else may reach the browser as a traceback, and no path may
+        # reach a message (FIX 1a).
+        return JSONResponse({"ok": False, "error":
+                             "The extraction service could not be used. Enter "
+                             "the declarations manually."}, status_code=500)
+    return JSONResponse({"ok": True, "model": result["model"],
+                         "values": result["values"],
+                         "confirmed": result.get("confirmed", {}),
+                         "ocr_available": result.get("ocr_available", False)})
 
 
 # --------------------------------------------------------------------------

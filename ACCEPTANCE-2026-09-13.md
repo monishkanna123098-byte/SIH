@@ -413,3 +413,149 @@ naive_vs_calibrated.py  md5 f3a14d36b82dceda0cae784d850878c5 (byte-identical)
 ```
 
 **C3 moves from FAIL to PASS. No other item's result changed.**
+
+---
+
+# CHUNK 8 — automated extraction from an image, 2026-09-13
+
+PS Key Functional Requirement 2. Parts 1–4 all built. Nothing in the
+measurement path was touched, and no engine module was modified.
+
+## Provider and model
+
+**Anthropic**, `claude-opus-5`, via the official `anthropic` Python SDK
+(1.5.0). Configured entirely from the environment — `LM_VISION_PROVIDER`,
+`LM_VISION_API_KEY`, `LM_VISION_MODEL`, optional `LM_VISION_BASE_URL` — under
+an `LM_VISION_*` namespace so the app cannot inherit unrelated provider
+credentials that happen to exist on the machine. `.env.example` carries names
+and empty values only.
+
+Request shape: 30-second hard timeout, `max_retries=0`, `max_tokens=2048`,
+`output_config={"effort": "low"}`. Effort is low deliberately — this is
+verbatim transcription, not reasoning; every value passes a human review gate
+before it can become a finding; and the binding constraint is an officer
+standing at the bench. Change it in one place if you disagree.
+
+## What was built
+
+| Part | Files |
+|---|---|
+| 1 — provider adapter | `app/vision.py` (new), `.env.example` (new), `.gitignore` |
+| 2 — review step | `app/static/extract.js` (new), `app/templates/upload.html`, `app/main.py`, `app/service.py`, `app/static/app.css` |
+| 3 — failure handling | `app/main.py` (`/extract-declarations`), `app/vision.py` |
+| 4 — OCR cross-check | `app/vision.py` (`ocr_text`), `app/service.py`, `app/static/extract.js`, `requirements.txt` |
+
+`app/vision.py` is the only file importing an SDK, and it imports it **inside**
+`make_call` — top-level imports are `base64`, `io`, `os`, `typing` only, so the
+app starts with `anthropic` absent. `service.py` is still the only file
+importing `lm_*`. The adapter does not parse JSON (`parse_vision_json` does),
+does not retry, and contains no prompt text.
+
+**The review gate.** Machine-filled fields carry a navy left border and
+`read from image — unconfirmed`; a field the model returned `null` for shows
+`not found in image`, never an empty box. Editing or confirming a field clears
+the mark. While any of the six is unreviewed, the coverage checkbox is disabled
+with the reason beside it. **That gate is enforced server-side as well** —
+`service.create_inspection` raises `ReviewRequired` regardless of the route, so
+a crafted POST cannot bypass it (test 28.5 calls the service directly).
+
+Only the keys the officer actually touched are passed to
+`apply_officer_corrections`, so an untouched machine value reports
+`vision:<model>` and an edited one reports `manual:<username>`.
+
+## Verification — all ten
+
+| # | Result | Evidence |
+|---|---|---|
+| 1 | **PASS** | `81 / 114 / 39 / 34 / 26`, `27` integration, **227** webapp checks (was 175), all `0 failed`. |
+| 2 | **PASS** | `naive_vs_calibrated.py` byte-identical to the pristine pre-chunk-4 run. All nine engine/demo modules still md5-identical to the original zip. |
+| 3 | **PASS** | B1 unchanged: blank + unticked → `PASS 0 · FAIL 0 · CANNOT_DETERMINE 6`. |
+| 4 | **PASS** | B2 unchanged: blank + ticked + operator ID → `FAIL 6`. B3, B4, B5 also re-run and unchanged. |
+| 5 | **PASS** | The automation-bias case. Extract, review nothing, tick coverage → **blocked** ("Review each declaration before stating you examined the package"). Partial review → still blocked. All six confirmed → allowed (HTTP 303). Both halves tested (28.1–28.3), plus the service-level bypass attempt (28.5). |
+| 6 | **PASS** | All-null machine output, no review, no coverage → six `CANNOT_DETERMINE`, zero `FAIL`. Reviewed, confirmed absent, coverage ticked → six `FAIL`, which is now correct because a human stated it. |
+| 7 | **PASS** | Checked in the generated PDF, not just in memory: five untouched fields read `vision:claude-opus-5`, the one edited field reads `manual:officer`, and no doubled prefix appears. |
+| 8 | **PASS** | Full suite passes with no API key set — 227 checks. Button absent, `extract.js` not loaded, endpoint refuses cleanly, manual path unchanged. |
+| 9 | **PASS** | Under `unshare -n` with a provider configured: button renders, extraction returns *"Could not reach the extraction service … Enter the declarations manually."* (HTTP 502, no traceback, no path), and a full manual inspection completes — six PASS, measured `1.40 mm ± 0.17 mm (k=2)`, PDF 7051 B and DOCX 39341 B both generated. |
+| 10 | **PASS** | Path grep returns nothing. `git status` clean of `.env` and keys; no `sk-ant-` or key material anywhere in `app/` or `.env.example`. |
+
+**Failure handling (Part 3), each tested separately:** no key → feature absent;
+unreachable/timeout → "Could not reach…"; `ExtractionError` → "returned an
+unusable response" — a **deliberately different message**, because six
+`CANNOT_DETERMINE` from a dead API key must not read as a bad photograph; any
+unexpected exception → generic handled message. None leak a traceback or a
+filesystem path, and all leave the image and the manual path intact.
+
+## Part 4 — the cross-check
+
+Built and working. `vision.ocr_text()` imports `pytesseract` lazily and returns
+`""` on any failure, so with OCR absent `crosscheck_verbatim` is skipped
+entirely and every field stays `verbatim_confirmed=None` — nothing is marked
+suspect (tests 33.7, 33.8).
+
+With OCR present, a value the OCR never saw is marked, carried through the
+form, and downgraded by `lm_declarations` to `CANNOT_DETERMINE` **before** any
+format check runs — so a possibly-invented string cannot be laundered into a
+`PASS`. Verified end to end with a value deliberately absent from the test
+label (33.2–33.5).
+
+The officer-facing text is *"reported by the model but not found by OCR —
+confirm on the package."* It is never called a hallucination: a `False` is
+equally consistent with OCR being worse than the model on glossy or curved
+packaging, which is the normal condition of these packets. Test 33.9 asserts
+that over the **user-visible strings**, not the source text.
+
+## One defect found and fixed during the chunk
+
+**Doubled extractor prefix.** `extract.js` posted `vision:<model>` and
+`service` prefixed it again, producing `vision:vision:test-model` in the
+report's provenance column. Caught by test 30.1. Fixed by giving the prefix a
+single owner: the form carries the bare model id, `service` adds `vision:`, and
+a value that already carries the prefix is normalised rather than doubled.
+
+## What I could not do
+
+**No live API call was made.** There is no `LM_VISION_API_KEY` in this
+environment, so every test runs against an injected fake backend — which is
+what `vision_extract` is designed for, and it exercises the full path from
+endpoint to findings to PDF. What that leaves unverified is the single
+round-trip to Anthropic's servers.
+
+What *was* checked without a key: every client kwarg (`api_key`, `base_url`,
+`timeout`, `max_retries`) and every request parameter (`model`, `max_tokens`,
+`messages`, `output_config`) is accepted by the installed SDK's signatures;
+`make_call` constructs a real client and returns a callable; PNG/JPEG/GIF/WebP
+pass through untouched and BMP/TIFF convert losslessly to PNG (the provider
+does not accept them).
+
+**Before the round, someone with a key must run one real extraction.** That is
+the only part of this chunk nobody has watched work. Everything else has been
+exercised, including all four failure branches.
+
+**Operational note:** the cross-check needs the `tesseract` binary, not just
+the Python package. It was installed here with `apt-get install tesseract-ocr`.
+On a laptop without it the cross-check silently skips, which is correct
+behaviour but means the differentiator is invisible — install it before the
+round if you want to show it.
+
+## Note on the test suite
+
+Five assertions across chunks 6, 7b and 8 initially failed because they matched
+**a comment saying the code does not do the thing** rather than the code. Each
+was rescoped to strip comments or to check user-visible strings. Listing it
+because the pattern has now recurred five times and is worth knowing about:
+in this codebase the comments describe the invariants, so any raw-text test
+over source will match them.
+
+## Self-test counts after chunk 8
+
+```
+legal model self-test:  81 checks, 0 failed
+capture self-test:     114 checks, 0 failed
+declarations self-test: 39 checks, 0 failed
+extract self-test:      34 checks, 0 failed
+report self-test:       26 checks, 0 failed
+integration:            27 checks, 0 failed
+webapp self-test:      227 checks, 0 failed   (was 175)
+
+naive_vs_calibrated.py  byte-identical to the pristine pre-chunk-4 run
+```

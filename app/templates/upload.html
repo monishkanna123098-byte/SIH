@@ -19,8 +19,15 @@
   <div class="field">
     <label for="image">Evidence image (optional)</label>
     <input type="file" id="image" name="image" accept="image/*">
-    <div class="hint">Stored with the record as supporting evidence. No
-      measurement is taken from it in this build.</div>
+    <div class="hint">Stored with the record as supporting evidence.</div>
+    {% if extraction %}
+    <div class="extract-row">
+      <button type="button" id="extract-btn" class="btn secondary">Read declarations from image</button>
+      <span class="hint" id="extract-status">Reads the six declarations below
+        from this image using {{ extraction.model }}. Nothing is recorded until
+        you review each one.</span>
+    </div>
+    {% endif %}
   </div>
 
   <div class="field">
@@ -68,13 +75,29 @@
     declaration below &mdash; not by leaving the box empty.
   </div>
   {% for f in fields %}
-  <div class="field">
+  {% set is_machine = form.machine is defined and f.key in (form.machine or {}) %}
+  {% set is_reviewed = f.key in (form.reviewed or []) %}
+  <div class="field decl-field" data-key="{{ f.key }}">
     <label for="{{ f.key }}">{{ f.label }}</label>
     <input type="text" id="{{ f.key }}" name="{{ f.key }}"
            value="{{ values.get(f.key, '') }}">
+    {# The machine's own value, carried so a validation error cannot silently
+       relabel an unreviewed machine value as officer-typed. #}
+    <input type="hidden" name="{{ f.key }}__machine" id="{{ f.key }}__machine"
+           value="{{ (form.machine or {}).get(f.key, '') }}">
+    <input type="hidden" name="{{ f.key }}__reviewed" id="{{ f.key }}__reviewed"
+           value="{{ '1' if is_reviewed else '' }}">
+    {# Cross-check result: "1" confirmed, "0" not found by OCR, "" not run. #}
+    <input type="hidden" name="{{ f.key }}__ocr" id="{{ f.key }}__ocr"
+           value="{{ (form.ocr or {}).get(f.key, '') }}">
+    <div class="decl-mark" id="{{ f.key }}__mark" hidden></div>
+    <button type="button" class="btn secondary confirm-btn"
+            id="{{ f.key }}__confirm" data-key="{{ f.key }}" hidden>Confirm</button>
     <div class="hint">{{ f.expected }}</div>
   </div>
   {% endfor %}
+  <input type="hidden" name="vision_model" id="vision_model"
+         value="{{ form.vision_model or '' }}">
 </fieldset>
 
 <fieldset>
@@ -138,9 +161,15 @@
   <div class="field">
     <label class="inline">
       <input type="checkbox" name="operator_examined_package" value="1"
+             id="operator_examined_package"
         {% if form.examined %}checked{% endif %}>
       I have examined the physical package itself, not only these images.
     </label>
+    {# Disabled while any machine-read declaration is unreviewed. The server
+       refuses the same combination independently -- this half is the
+       explanation, not the guard. #}
+    <div class="hint" id="coverage-gate" hidden>Review each declaration before
+      stating you examined the package.</div>
     <p class="consequence">
       Ticking this means a person had the package in hand and looked. It is what
       allows a missing declaration to be recorded as a violation rather than as
@@ -165,4 +194,5 @@
 
 <button type="submit">Record inspection</button>
 </form>
+{% if extraction %}<script src="/static/extract.js"></script>{% endif %}
 {% endblock %}

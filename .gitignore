@@ -5,6 +5,8 @@ venv/
 env/
 .env
 .env.*
+# the template carries variable NAMES and empty values only -- no secrets
+!.env.example
 *.key
 secrets.*
 credentials.*

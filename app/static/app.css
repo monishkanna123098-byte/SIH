@@ -310,3 +310,23 @@ details.chain pre {
   .pipeline .stage:last-child { border-bottom: none; }
   .pipeline .stage:not(:last-child)::after { content: none; }
 }
+
+/* ---- automated extraction review (chunk 8).
+   Existing tokens only, no new colours. The machine mark uses the same navy
+   rule the MEASURED box uses for "this is a different kind of claim"; the
+   absent mark is grey because "not found" is not a finding. ---------------- */
+.extract-row { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 10px;
+               align-items: baseline; }
+.extract-row .hint { flex: 1 1 320px; margin-top: 0; }
+
+.decl-field input.machine-filled { border-left: 3px solid var(--navy); }
+.decl-mark {
+  font-size: 11px; letter-spacing: .03em; margin-top: 3px;
+  font-family: Georgia, "Times New Roman", serif;
+}
+.decl-mark.machine { color: var(--navy); }
+.decl-mark.absent  { color: var(--grey); font-style: italic; }
+.decl-mark.reviewed { color: var(--grey); }
+.confirm-btn { font-size: 12px; padding: 3px 10px; margin-top: 5px; }
+#coverage-gate { color: var(--navy); margin-top: 4px; }
+.decl-mark.unconfirmed { color: var(--navy); font-style: italic; }

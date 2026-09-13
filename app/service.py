@@ -27,7 +27,7 @@ import lm_legal_model as legal
 import lm_metrology_v7 as lm
 import lm_report as rep
 
-from . import db
+from . import db, vision
 
 # Re-exported so routes and templates never need to import lm_* themselves.
 FIELD_KEYS = ex.FIELD_KEYS
@@ -113,6 +113,102 @@ def declaration_fields() -> list[dict]:
 # --------------------------------------------------------------------------
 # Creating an inspection
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# Automated extraction (chunk 8)
+# --------------------------------------------------------------------------
+class ReviewRequired(Exception):
+    """Raised when an absence claim is attempted over unreviewed machine output.
+
+    THE HAZARD THIS EXISTS FOR. `vision_extract` correctly sets
+    `asserts_absent=False` for everything it returns. But
+    `apply_officer_corrections` re-derives `asserts_absent` from coverage for
+    any field the officer touches -- and a form submit can look like an officer
+    standing behind all six values when they reviewed none of them. Without
+    this gate the sequence is: the model fails to read two declarations, the
+    officer ticks "I examined the package" because they are about to, and two
+    nulls become a recorded non-compliance against a named packer on the
+    strength of what a model could not see.
+
+    The gate is enforced HERE, not only in the browser, because a disabled
+    checkbox is a convenience and this is an invariant.
+    """
+
+
+def extraction_available() -> Optional[dict]:
+    """What provider is configured, or None. Never returns the key."""
+    return vision.configured()
+
+
+def extract_from_image(image_bytes: bytes) -> dict:
+    """Run the configured provider over one image.
+
+    Returns {"model": str, "values": {key: str|None}}. Raises
+    `vision.VisionUnavailable`, `vision.VisionTransportError`, or
+    `ex.ExtractionError` -- three distinct conditions that must stay distinct:
+    absent, unreachable, and answered-with-something-unusable.
+    """
+    call, model = vision.call_from_env()
+    # Coverage is passed because the signature takes it; it changes nothing.
+    # `vision_extract` sets asserts_absent=False unconditionally, even under
+    # full coverage, and that is the point of the function.
+    fields = ex.vision_extract(image_bytes, call, ex.Coverage(),
+                               backend_name=f"vision:{model}")
+
+    # The cross-check (chunk 8 part 4). A value that no OCR engine on the SAME
+    # image saw is marked unconfirmed, and lm_declarations downgrades it to
+    # CANNOT_DETERMINE BEFORE any format check runs -- so a possibly-invented
+    # string can never be laundered into a PASS. With OCR unavailable the dump
+    # is "" and every field stays None: no cross-check was possible.
+    dump = vision.ocr_text(image_bytes)
+    if dump.strip():
+        fields = ex.crosscheck_verbatim(fields, dump)
+    return {"model": model,
+            "values": {k: fields[k].value for k in FIELD_KEYS},
+            "confirmed": {k: fields[k].verbatim_confirmed for k in FIELD_KEYS},
+            "ocr_available": bool(dump.strip())}
+
+
+def _confirm_flag(confirmed: Optional[dict], key: str):
+    """"1" -> True, "0" -> False, anything else -> None (no cross-check)."""
+    raw = (confirmed or {}).get(key, "")
+    return {"1": True, "0": False}.get(str(raw), None)
+
+
+def _fields_from_machine(machine_values: dict, reviewed_keys, values: dict,
+                         coverage, operator: str, vision_model: str,
+                         machine_confirmed: Optional[dict] = None) -> dict:
+    """Machine output, with the officer's reviewed edits laid over it.
+
+    Only the keys the officer actually touched are passed to
+    `apply_officer_corrections`. Passing all six would record the officer as
+    the source of values they never read, which is exactly the claim the
+    report's `extractor` column exists to keep honest.
+    """
+    reviewed = set(reviewed_keys or ())
+    unreviewed = [k for k in FIELD_KEYS if k not in reviewed]
+    if coverage.can_assert_absence() and unreviewed:
+        raise ReviewRequired(
+            "Review each declaration before stating you examined the package.")
+
+    # One owner for the prefix. The form carries the bare model id; a value
+    # that already carries "vision:" (an older form, or a hand-crafted post)
+    # is normalised rather than doubled.
+    bare = (vision_model or "").strip()
+    if bare.lower().startswith("vision:"):
+        bare = bare.split(":", 1)[1].strip()
+    machine = {
+        k: dec.ExtractedField(
+            value=(machine_values.get(k) or None),
+            asserts_absent=False,                  # never True from a model
+            extractor=f"vision:{bare}" if bare else "vision",
+            verbatim_confirmed=_confirm_flag(machine_confirmed, k))
+        for k in FIELD_KEYS
+    }
+    corrections = {k: values.get(k, "") for k in FIELD_KEYS if k in reviewed}
+    return ex.apply_officer_corrections(machine, corrections, coverage,
+                                        operator=operator)
+
+
 def _next_inspection_id(con) -> str:
     today = datetime.date.today().strftime("%Y%m%d")
     n = con.execute(
@@ -142,7 +238,10 @@ def create_inspection(*, user: dict, product_name: str, values: dict,
                       scale_ppm: Optional[float] = None,
                       scale_artifact: str = "", scale_artifact_tier: str = "",
                       declared_commodity_class: str = "",
-                      declared_glyph_count: Optional[int] = None) -> str:
+                      declared_glyph_count: Optional[int] = None,
+                      machine_values: Optional[dict] = None,
+                      reviewed_keys=None, vision_model: str = "",
+                      machine_confirmed: Optional[dict] = None) -> str:
     """Run the extraction + declaration checks and persist the result.
 
     `values` maps declaration key -> the text the officer read off the package,
@@ -150,7 +249,14 @@ def create_inspection(*, user: dict, product_name: str, values: dict,
     decided by `Coverage`, inside `manual_extract` -- never here.
     """
     coverage = build_coverage(panels, examined, operator_id, note)
-    fields = ex.manual_extract(values, coverage, operator=user["username"])
+    if machine_values is None:
+        # The manual path, untouched. This is still a first-class input, not a
+        # fallback, and it is what runs with no provider configured.
+        fields = ex.manual_extract(values, coverage, operator=user["username"])
+    else:
+        fields = _fields_from_machine(machine_values, reviewed_keys, values,
+                                      coverage, user["username"], vision_model,
+                                      machine_confirmed)
     findings = dec.check_declarations(fields)
     summary = dec.summarise(findings)
 

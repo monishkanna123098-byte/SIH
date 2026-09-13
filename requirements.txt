@@ -16,3 +16,16 @@ opencv-python-headless
 pillow
 # Test client for test_webapp.py only
 httpx
+
+# ---- OPTIONAL -------------------------------------------------------------
+# Everything below is optional. With all of it absent the app starts, runs and
+# passes every test; automated extraction is simply absent and the manual path
+# -- a first-class input, not a fallback -- is unchanged.
+#
+# Automated declaration extraction (chunk 8). Needs LM_VISION_API_KEY set too;
+# with no key the button does not render.
+anthropic
+# The OCR cross-check. Also needs the `tesseract` binary on PATH
+# (Debian/Ubuntu: apt-get install tesseract-ocr). Absent -> the cross-check is
+# skipped entirely and every field stays verbatim_confirmed=None.
+pytesseract
