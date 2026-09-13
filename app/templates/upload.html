@@ -40,9 +40,22 @@
       <span class="declared-tag">&mdash; operator declared</span></label>
     <input type="text" id="declared_pdp_area_cm2" name="declared_pdp_area_cm2"
            value="{{ form.declared_pdp_area_cm2 or '' }}">
-    <div class="hint">Neither the category nor the panel area is discoverable
-      from an image. Both are claims you are making, and both are recorded as
-      yours.</div>
+  </div>
+
+  <div class="field">
+    <label for="declared_commodity_class">Commodity class
+      <span class="declared-tag">&mdash; operator declared</span></label>
+    <select id="declared_commodity_class" name="declared_commodity_class">
+      <option value="">(not declared)</option>
+      {% for c in commodity_classes %}
+      <option value="{{ c }}"
+        {% if form.declared_commodity_class == c %}selected{% endif %}>{{ c }}</option>
+      {% endfor %}
+    </select>
+    <div class="hint">None of the category, the panel area or the commodity
+      class is discoverable from an image. All three are claims you are making,
+      all three are recorded as yours, and the statutory minimum height cannot
+      be resolved without them.</div>
   </div>
 </fieldset>
 
@@ -64,8 +77,53 @@
   {% endfor %}
 </fieldset>
 
+<fieldset>
+  <legend>3 &middot; Scale reference</legend>
+  <div class="hint" style="margin-bottom:12px">
+    A height in pixels becomes a height in millimetres only through a
+    pixels-per-millimetre factor. With nothing of known size in the frame that
+    factor has to be assumed, and an assumed factor is wrong by however far the
+    camera has moved. <b>Leave this blank and no height is measured</b> &mdash;
+    that is a correct outcome, not a gap. There is no fallback that infers the
+    scale from the image.
+  </div>
+
+  <div class="field">
+    <label for="scale_ppm">Scale, pixels per millimetre</label>
+    <input type="text" id="scale_ppm" name="scale_ppm"
+           value="{{ form.scale_ppm or '' }}">
+    <div class="hint">From a completed scale session against an artifact of
+      known size. Below {{ min_ppm }} px/mm the engine will refuse every
+      specimen with RESOLUTION.</div>
+  </div>
+
+  <div class="field">
+    <label for="scale_artifact">Scale artifact</label>
+    <input type="text" id="scale_artifact" name="scale_artifact"
+           value="{{ form.scale_artifact or '' }}">
+    <div class="hint">What was in frame, and how its size is known.</div>
+  </div>
+
+  <div class="field">
+    <label for="scale_artifact_tier">Scale artifact tier</label>
+    <input type="text" id="scale_artifact_tier" name="scale_artifact_tier"
+           value="{{ form.scale_artifact_tier or '' }}">
+    <div class="hint">How much weight the artifact carries &mdash; whether its
+      dimension is certified, and by whom. Recorded, not assessed.</div>
+  </div>
+
+  <div class="field">
+    <label for="declared_glyph_count">Expected glyph count
+      <span class="declared-tag">&mdash; operator declared</span></label>
+    <input type="text" id="declared_glyph_count" name="declared_glyph_count"
+           value="{{ form.declared_glyph_count or '' }}">
+    <div class="hint">How many characters you expect in the region you will
+      select. Blank disables the completeness check.</div>
+  </div>
+</fieldset>
+
 <fieldset class="coverage">
-  <legend>3 &middot; Coverage declaration</legend>
+  <legend>4 &middot; Coverage declaration</legend>
 
   <div class="field">
     <label>Panels captured</label>

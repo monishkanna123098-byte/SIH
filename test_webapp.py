@@ -160,8 +160,11 @@ def main() -> int:
     page = client.get(f"/scan/{full}").text
     ck("5.2 results page renders", "Mandatory declarations" in page)
     ck("5.3 EXTRACTED tier labelled", "[tier: EXTRACTED]" in page)
+    # Chunk 5 replaced chunk 4's blanket "Not yet measured" with a reason: this
+    # inspection has no evidence image, so it says so. The section is still
+    # shown either way -- its presence is the point.
     ck("5.4 MEASURED section present even with no measurement",
-       "[tier: MEASURED]" in page and "Not yet measured" in page)
+       "[tier: MEASURED]" in page and "No evidence image" in page)
     ck("5.5 DETERMINED tier labelled", "[tier: DETERMINED]" in page)
     ck("5.6 measured section is the cream/navy box, not the plain table",
        'class="measured"' in page)
@@ -285,7 +288,7 @@ def main() -> int:
     ck("11.6 measured section renders the value", "1.15 mm ± 0.17 mm" in page3)
     ck("11.7 capture manifest surfaced", "NIST-traceable rule" in page3)
     ck("11.8 measured box still visually distinct", 'class="measured"' in page3
-       and "Not yet measured" not in page3)
+       and "No evidence image" not in page3)
     pdf2 = client.get(f"/scan/{full}/report.pdf")
     ck("11.9 PDF carries the measured section once a measurement exists",
        pdf2.status_code == 200 and len(pdf2.content) > len(rp.content),
@@ -299,6 +302,266 @@ def main() -> int:
     except ValueError:
         raised = True
     ck("11.10 a height without an uncertainty is rejected", raised)
+
+    # ======================================================================
+    # CHUNK 5 -- the measurement
+    # ======================================================================
+    import io
+    import lm_metrology_v7 as _lm
+    import lm_legal_model as _legal
+    import numpy as _np
+    from PIL import Image as _Image
+
+    def synthetic_label(target_mm: float, ppm: float = 120.0,
+                        contrast=(0.10, 0.85)) -> bytes:
+        """A real measurable label, saved as an 8-bit PNG the app can accept.
+
+        Same generator the metrology harness uses, so the pixels the engine
+        sees here are the pixels it is characterised on -- then round-tripped
+        through PNG exactly as an uploaded file would be.
+        """
+        sc = _lm.make_glyphs(ppm, target_ref_mm=target_mm, contrast=contrast)
+        img = _lm.blur_noise(sc.img, 1.8, 0.010, 0)
+        buf = io.BytesIO()
+        _Image.fromarray((_np.clip(img, 0, 1) * 255).astype(_np.uint8), "L").save(
+            buf, format="PNG")
+        return buf.getvalue()
+
+    def create_measurable(client, *, target_mm=1.4, ppm=120.0, pdp="40",
+                          commodity=_legal.COMMODITY_GENERAL, contrast=(0.10, 0.85),
+                          scale_ppm=None, with_image=True, name="Measured product"):
+        data = {"product_name": name, "declared_category": "general",
+                "declared_pdp_area_cm2": pdp,
+                "declared_commodity_class": commodity,
+                "declared_glyph_count": "9",
+                "scale_artifact": "chessboard target, 2.00 mm pitch",
+                "scale_artifact_tier": "workshop rule, dimension not certified",
+                "panels": ["front"], "operator_examined_package": "1",
+                "operator_id": "LM-OFF-114", **BLANK}
+        if scale_ppm is None:
+            scale_ppm = str(ppm)
+        if scale_ppm != "":
+            data["scale_ppm"] = scale_ppm
+        files = {}
+        if with_image:
+            files["image"] = ("label.png", synthetic_label(target_mm, ppm, contrast),
+                              "image/png")
+        r = client.post("/upload", data=data, files=files or None,
+                        follow_redirects=False)
+        assert r.status_code == 303, r.text[:500]
+        return r.headers["location"].rsplit("/", 1)[-1]
+
+    def measure(client, iid, box):
+        x, y, w, h = box
+        return client.post(f"/scan/{iid}/measure",
+                           data={"x": x, "y": y, "w": w, "h": h},
+                           follow_redirects=False)
+
+    def full_box(iid):
+        sc = service.get_scan(iid)
+        wh = service.image_size(sc)
+        return (0, 0, wh[0], wh[1])
+
+    # ---- 12. done 1: px/mm + region -> a populated row and a cream box ----
+    comp = create_measurable(client, target_mm=1.4, name="Compliant specimen")
+    r = measure(client, comp, full_box(comp))
+    ck("12.1 measure redirects back to the record", r.status_code == 303)
+    mv = service.results_view(comp)["measurement"]
+    ck("12.2 a measurement row exists", mv["state"] == "measured", str(mv["state"]))
+    ck("12.3 band is COMPLIANT for a 1.4 mm specimen against 1.0 mm",
+       mv["verdict"] == "PASS" and "COMPLIANT" in mv["headline"],
+       f"{mv['verdict']} / {mv['headline']}")
+    ck("12.4 height carries its uncertainty", "k=2" in mv["stated"]
+       and "±" in mv["stated"], mv["stated"])
+    ck("12.5 threshold came from the legal model", mv["threshold"] == "1.00 mm",
+       mv["threshold"])
+    ck("12.6 threshold source tier is stated, not assumed",
+       "AGGREGATOR" in mv["threshold_source_tier"], mv["threshold_source_tier"])
+    ck("12.7 convention recorded", "50%" in mv["convention"], mv["convention"])
+    page = client.get(f"/scan/{comp}").text
+    ck("12.8 cream box renders the measurement", 'class="measured"' in page
+       and "COMPLIANT" in page)
+    ck("12.9 the height appears on the page with its uncertainty",
+       mv["stated"] in page)
+    con = db.connect(db.DB_PATH)
+    try:
+        row = con.execute("""SELECT * FROM measurements WHERE scan_id=
+                             (SELECT id FROM scans WHERE inspection_id=?)""",
+                          (comp,)).fetchone()
+    finally:
+        con.close()
+    ck("12.10 the row is in `measurements`, not in `findings`", row is not None)
+    ck("12.11 the row carries band, height, u and threshold",
+       row["band"] and row["height_mm"] and row["u_mm"] and row["threshold_mm"])
+
+    # ---- 13. done 2: no px/mm -> no measurement, said plainly -------------
+    noscale = create_measurable(client, scale_ppm="", name="No scale reference")
+    nv = service.results_view(noscale)["measurement"]
+    ck("13.1 no scale -> no measurement attempted", nv["state"] == "no_scale",
+       str(nv["state"]))
+    npage = client.get(f"/scan/{noscale}").text
+    ck("13.2 the page says so plainly", "No scale reference" in npage
+       and "height cannot be measured" in npage.lower())
+    ck("13.3 no measurement row was written", nv["attempts"] == 0)
+    ck("13.4 posting a region without a scale is refused, not guessed",
+       measure(client, noscale, (0, 0, 50, 50)).headers["location"].count(
+           "measure_error") == 1)
+    ck("13.5 no DPI fallback is offered anywhere on the upload form",
+       "dpi" not in client.get("/upload").text.lower())
+    ck("13.6 the scale field has no default value",
+       'name="scale_ppm"' in client.get("/upload").text
+       and 'name="scale_ppm"\n           value=""' in client.get("/upload").text
+       or 'value=""' in client.get("/upload").text)
+
+    # ---- 14. done 3: near-threshold is a calm panel, not an error ---------
+    near = create_measurable(client, target_mm=1.0, name="Near threshold")
+    measure(client, near, full_box(near))
+    nmv = service.results_view(near)["measurement"]
+    ck("14.1 near-threshold refers for physical verification",
+       nmv["verdict"] == "CANNOT_DETERMINE", str(nmv["verdict"]))
+    ck("14.2 headline reads INDETERMINATE, not an error",
+       nmv["headline"].startswith("INDETERMINATE"), nmv["headline"])
+    ck("14.3 the reason names the straddle", "straddles" in nmv["basis"],
+       nmv["basis"])
+    ck("14.4 a next action is offered",
+       "physical verification" in nmv["next_action"].lower(), nmv["next_action"])
+    npg = client.get(f"/scan/{near}")
+    ck("14.5 the page is a normal 200, not an error page",
+       npg.status_code == 200)
+    ck("14.6 the refusal renders inside the cream measured box",
+       'class="measured"' in npg.text and "INDETERMINATE" in npg.text)
+    ck("14.7 no error styling around the refusal",
+       'class="error"' not in npg.text.split('class="measured"')[1].split("</div>")[0])
+    ck("14.8 height and uncertainty still printed together on a straddle",
+       "±" in nmv["stated"] and "k=2" in nmv["stated"], nmv["stated"])
+
+    # ---- 15. done 4: the disputed bracket leaks nothing -------------------
+    disp = create_measurable(client, target_mm=1.4, pdp="75",
+                             name="Disputed bracket")
+    measure(client, disp, full_box(disp))
+    dmv = service.results_view(disp)["measurement"]
+    ck("15.1 disputed bracket refuses",
+       dmv["refusal_code"] == _legal.BLOCK_THRESHOLD_DISPUTED,
+       str(dmv["refusal_code"]))
+    ck("15.2 no height is printed", dmv["stated"] == "not measured", dmv["stated"])
+    ck("15.3 no threshold is printed", dmv["threshold"] == "not resolved",
+       dmv["threshold"])
+    dpage = client.get(f"/scan/{disp}").text
+    for leaked in ("1.5 mm", "2.0 mm", "1.5mm", "2.0mm"):
+        ck(f"15.x candidate {leaked!r} does not reach the page",
+           leaked not in dpage)
+    # Scoped to the text the LEGAL layer produces, the way test_integration
+    # scopes it. The operator's own scale-artifact description is echoed in the
+    # manifest and may legitimately contain any number they typed; a bare
+    # substring test over the whole manifest measures the operator, not the leak.
+    legal_text = (dmv["basis"] + " " + dmv["refusal_detail"] + " "
+                  + " ".join(l for l in dmv["manifest"]
+                             if not l.startswith(("scale ", "measurement attempt",
+                                                  "region measured", "ROI sensitivity")))) 
+    for leaked in ("1.5", "2.0"):
+        ck(f"15.y candidate {leaked!r} does not reach the legal text",
+           leaked not in legal_text, legal_text[:220])
+    ck("15.6 rule_candidates are not rendered", "rule_candidates" not in dpage)
+    ck("15.7 the next action names the rule, not a re-capture",
+       "not settled" in dmv["next_action"], dmv["next_action"])
+
+    # ---- 16. done 5: the region is stored, drawn, and labelled ------------
+    sc_comp = service.get_scan(comp)
+    ck("16.1 roi_box stored", row["roi_box"] == "0,0,%d,%d" % service.image_size(sc_comp),
+       str(row["roi_box"]))
+    ck("16.2 an annotated copy was written",
+       bool(sc_comp["image_annotated_path"]))
+    ck("16.3 the original evidence image is untouched",
+       sc_comp["image_annotated_path"] != sc_comp["image_path"])
+    orig = client.get(f"/scan/{comp}/image")
+    drawn = client.get(f"/scan/{comp}/image.roi")
+    ck("16.4 both images serve", orig.status_code == 200 and drawn.status_code == 200)
+    ck("16.5 the drawn copy differs from the original",
+       orig.content != drawn.content)
+    ck("16.6 the region is labelled operator-declared",
+       "operator-declared region" in page)
+    ck("16.7 the ROI sensitivity is stated, not folded into U",
+       "not in the uncertainty budget" in page.lower()
+       or "NOT in the uncertainty budget" in " ".join(mv["manifest"]))
+    # The drag itself needs a browser and is NOT exercised here. What is
+    # checked: the conversion exists and is derived from naturalWidth rather
+    # than assumed 1:1, and -- server-side, above -- that a posted box is
+    # interpreted in image pixels (16.1 compares it to the real image size).
+    _roi_js = open("app/static/roi.js").read()
+    ck("16.8 the selector converts display px to image px",
+       "naturalWidth" in _roi_js and "natural / shown" in _roi_js)
+    ck("16.9 the conversion happens in one place",
+       _roi_js.count("function factor()") == 1)
+
+    # ---- 17. done 6: the documents carry the measurement ------------------
+    pdf = client.get(f"/scan/{comp}/report.pdf")
+    docx = client.get(f"/scan/{comp}/report.docx")
+    ck("17.1 PDF exports with a measurement", pdf.status_code == 200
+       and pdf.content[:5] == b"%PDF-")
+    ck("17.2 DOCX exports with a measurement", docx.status_code == 200
+       and docx.content[:2] == b"PK")
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(docx.content)) as z:
+        dx = z.read("word/document.xml").decode("utf-8", "replace")
+    ck("17.3 DOCX carries the height and its uncertainty",
+       "k=2" in dx and "1.40" in dx, "height/U missing from DOCX")
+    ck("17.4 DOCX carries the convention", "50%" in dx or "50" in dx)
+    ck("17.5 DOCX carries the threshold source tier", "AGGREGATOR" in dx)
+    ck("17.6 DOCX has the MEASURED tier heading", "Character height" in dx)
+
+    # ---- 18. pre-flight quality gates, surfaced not reimplemented ---------
+    lowc = create_measurable(client, target_mm=1.4, contrast=(0.45, 0.55),
+                             name="Low contrast capture")
+    measure(client, lowc, full_box(lowc))
+    qv = service.results_view(lowc)["measurement"]
+    ck("18.1 a low-contrast capture is refused by the engine's own gate",
+       qv["refusal_code"] == "CONTRAST", str(qv["refusal_code"]))
+    ck("18.2 it reads as an image problem, not a compliance outcome",
+       qv["is_quality"] and "IMAGE QUALITY" in qv["headline"], qv["headline"])
+    ck("18.3 the remedy is to re-light and rescan",
+       "re-light" in qv["next_action"].lower(), qv["next_action"])
+    ck("18.4 a quality refusal is still CANNOT_DETERMINE, never FAIL",
+       qv["verdict"] == "CANNOT_DETERMINE", str(qv["verdict"]))
+
+    # Below min_px_per_mm the ENGINE refuses; the app does not pre-empt it.
+    lowppm = create_measurable(client, target_mm=1.4, ppm=20.0,
+                               name="Below the resolution floor")
+    measure(client, lowppm, full_box(lowppm))
+    rv = service.results_view(lowppm)["measurement"]
+    ck("18.5 a sub-floor scale is attempted, and the engine issues RESOLUTION",
+       rv["refusal_code"] == "RESOLUTION", str(rv["refusal_code"]))
+    ck("18.6 the app did not pre-empt the engine's gate",
+       rv["state"] == "measured")
+
+    # FLOOR_LIMITED has no reachable region of its own (AUDIT 2.2): below
+    # 30 px/mm RESOLUTION fires, at or above it FLOOR_LIMITED cannot. No UI
+    # claims it, and nothing here expects it.
+    ck("18.7 no UI is built for the unreachable FLOOR_LIMITED gate",
+       "FLOOR_LIMITED" not in open("app/templates/results.html").read()
+       and "FLOOR_LIMITED" not in open("app/service.py").read())
+    # PLANARITY and NO_REDUNDANCY cannot fire on this path -- no fiducials are
+    # passed -- so nothing claims them either.
+    for gate in ("PLANARITY", "NO_REDUNDANCY"):
+        ck(f"18.x nothing claims {gate}",
+           gate not in open("app/templates/results.html").read()
+           and gate not in page)
+
+    # ---- 19. vocabulary and the audit's named limits ---------------------
+    ck("19.1 the word 'accuracy' is not used -- nothing has met a standard",
+       "accuracy" not in page.lower() and "accurate" not in page.lower())
+    ck("19.2 re-measuring appends rather than overwrites",
+       (measure(client, comp, (0, 0, 200, 200)).status_code == 303)
+       and service.results_view(comp)["measurement"]["attempts"] == 2)
+    ck("19.3 earlier regions stay on the record",
+       len(service.results_view(comp)["measurement"]["earlier_regions"]) == 1)
+    page2 = client.get(f"/scan/{comp}").text
+    ck("19.4 the record says how many attempts there have been",
+       "measurement attempt 2" in page2.lower())
+    ck("19.5 a region outside the image is refused",
+       "measure_error" in measure(client, comp, (0, 0, 99999, 99999)
+                                  ).headers["location"])
+    ck("19.6 a zero-area region is refused",
+       "measure_error" in measure(client, comp, (0, 0, 0, 0)).headers["location"])
 
     print("=" * 74)
     for f in fails:

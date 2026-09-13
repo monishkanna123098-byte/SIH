@@ -60,37 +60,125 @@
 </table>
 
 {# ---- Section 2 -- MEASURED. Deliberately NOT the same as the table above.
-   Cream ground, heavy navy border, key/value rows. The section is shown even
-   with no measurement: its presence is the point (invariant 3). ---------- #}
+   Cream ground, heavy navy border, key/value rows. Every refusal renders HERE,
+   in this same styling, as a calm panel with a reason and a next action --
+   never as a red toast or an error page (invariant 5). #}
+{% set m = v.measurement %}
 <h2>Character height &mdash; Rule 7(2)
     <span class="tier">[tier: MEASURED]</span></h2>
 <div class="measured">
-{% if v.measurement %}
+{% if m.state == 'measured' %}
+  <div class="m-headline">{{ m.headline }}</div>
+  {% if m.stated != 'not measured' %}
+  <p class="m-body">Measured {{ m.stated }} against a {{ m.threshold }}
+     requirement.</p>
+  {% endif %}
+  <p class="m-body">{{ m.basis }}</p>
+  {% if m.next_action %}<p class="m-next">Next: {{ m.next_action }}</p>{% endif %}
+
   <table>
-    <tr><th>Verdict</th><td>{{ v.measurement.verdict.replace('_', ' ') }}</td></tr>
-    <tr><th>Measured</th><td>{{ v.measurement.stated }}</td></tr>
-    <tr><th>Required</th><td>{{ v.measurement.threshold }}</td></tr>
-    <tr><th>Threshold source</th>
-        <td>{{ v.measurement.threshold_source_tier }}</td></tr>
-    <tr><th>Basis</th><td>{{ v.measurement.basis }}</td></tr>
-    {% if v.measurement.convention %}
-    <tr><th>Convention</th><td>{{ v.measurement.convention }}</td></tr>
+    <tr><th>Verdict</th><td>{{ m.verdict.replace('_', ' ') }}</td></tr>
+    <tr><th>Measured</th><td>{{ m.stated }}</td></tr>
+    <tr><th>Required</th><td>{{ m.threshold }}</td></tr>
+    <tr><th>Threshold source</th><td>{{ m.threshold_source_tier }}</td></tr>
+    {% if m.convention %}
+    <tr><th>Convention</th><td>{{ m.convention }}</td></tr>
     {% endif %}
-    {% if v.measurement.roi_box %}
+    {% if m.refusal_code %}
+    <tr><th>Refusal</th><td>{{ m.refusal_code }}</td></tr>
+    {% endif %}
+    {% if m.scale_ppm %}
+    <tr><th>Scale reference</th>
+        <td>{{ m.scale_ppm }} px/mm &mdash; {{ m.scale_artifact or 'artifact not described' }}
+            [{{ m.scale_artifact_tier or 'tier not stated' }}]</td></tr>
+    {% endif %}
+    {% if m.roi_box %}
     <tr><th>Region measured</th>
-        <td>{{ v.measurement.roi_box }} (operator-declared)</td></tr>
+        <td>x={{ m.roi_box[0] }} y={{ m.roi_box[1] }}
+            w={{ m.roi_box[2] }} h={{ m.roi_box[3] }} px
+            <span class="declared-tag">&mdash; operator-declared region</span></td></tr>
     {% endif %}
   </table>
-  {% if v.measurement.manifest %}
+
+  <p class="m-caveat">{{ m.roi_note }}</p>
+
+  {% if m.attempts > 1 %}
+  <p class="m-caveat">This is measurement attempt {{ m.attempts }} on this
+    inspection. Earlier operator-declared regions, kept on the record:
+    {% for r in m.earlier_regions %}[{{ r }}]{% if not loop.last %}, {% endif %}{% endfor %}.</p>
+  {% endif %}
+
+  {% if m.annotated %}
+  <div class="evidence" style="margin-top:12px">
+    <div class="declared-tag">operator-declared region, drawn on a copy of the
+      evidence image</div>
+    <img src="/scan/{{ v.scan.inspection_id }}/image.roi"
+         alt="evidence image with the operator-declared region drawn on it">
+  </div>
+  {% endif %}
+
+  {% if m.manifest %}
   <div class="manifest">Capture manifest
-{% for line in v.measurement.manifest %}{{ line }}
+{% for line in m.manifest %}{{ line }}
 {% endfor %}</div>
   {% endif %}
+
+{% elif m.state == 'no_scale' %}
+  <div class="m-headline">No scale reference</div>
+  <p class="m-body">Height cannot be measured from this image. A height in
+    pixels becomes a height in millimetres only through a pixels-per-millimetre
+    factor, and none was recorded for this inspection.</p>
+  <p class="m-next">Next: run a scale session against an artifact of known size
+    and record the inspection again with its px/mm value. This instrument does
+    not infer the scale from the image.</p>
+
+{% elif m.state == 'no_image' %}
+  <div class="m-headline">No evidence image</div>
+  <p class="m-body">There is no image on this inspection, so there is no region
+    to measure.</p>
+  <p class="m-next">Next: record the inspection again with the captured image
+    attached.</p>
+
 {% else %}
-  <div class="absent">Not yet measured &mdash; this inspection has no height
-    measurement.</div>
+  <div class="m-headline">Not yet measured</div>
+  <p class="m-body">This inspection has a scale reference and an evidence image
+    but no height measurement yet.</p>
+  <p class="m-next">Next: draw the region to measure, below.</p>
 {% endif %}
 </div>
+
+{# The region is a declared input, so selecting it is an operator action with
+   its own block -- not a hidden preprocessing step inside the measurement. #}
+{% if may_determine and m.image_w and m.scale_ppm %}
+<div class="roi-picker">
+  <h3>Operator-declared region{% if m.state == 'measured' %} &mdash; measure again{% endif %}</h3>
+  <p class="hint">Drag across the characters to draw the region. The engine
+    measures whatever it is handed: include the printed field, not the platen or
+    the packet edge. Where you put the boundary changes the number, so the box
+    is recorded with the measurement.</p>
+  {% if request.query_params.get('measure_error') %}
+  <div class="error">{{ request.query_params.get('measure_error') }}</div>
+  {% endif %}
+  <div class="roi-stage">
+    <img id="roi-img" src="/scan/{{ v.scan.inspection_id }}/image"
+         data-natural-w="{{ m.image_w }}" data-natural-h="{{ m.image_h }}"
+         alt="evidence image">
+    <canvas id="roi-canvas"></canvas>
+  </div>
+  <form method="post" action="/scan/{{ v.scan.inspection_id }}/measure">
+    <div class="roi-coords">
+      <label>x <input type="text" id="roi-x" name="x" value="" size="6"></label>
+      <label>y <input type="text" id="roi-y" name="y" value="" size="6"></label>
+      <label>w <input type="text" id="roi-w" name="w" value="" size="6"></label>
+      <label>h <input type="text" id="roi-h" name="h" value="" size="6"></label>
+      <span class="hint">image pixels, of
+        {{ m.image_w }}&times;{{ m.image_h }}</span>
+    </div>
+    <button type="submit">Measure this region</button>
+  </form>
+</div>
+<script src="/static/roi.js"></script>
+{% endif %}
 
 {# ---- Section 3 -- DETERMINED. A form, empty until filled. -------------- #}
 <h2>Officer determination <span class="tier">[tier: DETERMINED]</span></h2>

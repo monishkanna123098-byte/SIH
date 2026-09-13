@@ -103,6 +103,31 @@ SEED_USERS = (("officer", "officer-2026", "officer"),
               ("supervisor", "supervisor-2026", "supervisor"))
 
 
+# Columns added after chunk 4 shipped. Applied with ALTER TABLE rather than by
+# editing SCHEMA, so a database created by chunk 4 keeps its rows -- and applied
+# by inspection rather than by a version counter, so the two cannot drift.
+# `measurements` needed no change: chunk 4 wrote that table to the BUILD-SPEC
+# contract and chunk 5 only fills it.
+MIGRATIONS = {
+    "scans": (
+        ("scale_ppm", "REAL"),                    # operator-entered px/mm
+        ("scale_artifact", "TEXT"),               # what was in frame
+        ("scale_artifact_tier", "TEXT"),          # how much weight it carries
+        ("declared_commodity_class", "TEXT"),
+        ("declared_glyph_count", "INTEGER"),
+        ("image_annotated_path", "TEXT"),         # copy with the ROI drawn on it
+    ),
+}
+
+
+def _migrate(con) -> None:
+    for table, columns in MIGRATIONS.items():
+        have = {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}
+        for name, decl in columns:
+            if name not in have:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+
 def init_db(path: str | None = None) -> None:
     """Create directories, schema and the two seeded users. Idempotent."""
     for d in (DATA_DIR, UPLOAD_DIR, REPORT_DIR):
@@ -110,6 +135,7 @@ def init_db(path: str | None = None) -> None:
     con = connect(path)
     try:
         con.executescript(SCHEMA)
+        _migrate(con)
         for username, password, role in SEED_USERS:
             if con.execute("SELECT 1 FROM users WHERE username=?",
                            (username,)).fetchone() is None:

@@ -30,7 +30,7 @@ hosting. "Web application" is satisfied by a browser pointed at localhost.
 
 ```bash
 ./run.sh                 # http://localhost:8000
-python3 test_webapp.py   # 61 checks, 0 failed
+python3 test_webapp.py   # 127 checks, 0 failed
 ```
 
 Seeded users, one per role: `officer` / `officer-2026` and
@@ -45,6 +45,23 @@ declarations from images alone are six CANNOT_DETERMINE; the same six blanks
 are six FAIL only once a named operator states they examined the physical
 package. That difference is invariant 2, and it is the whole reason the
 coverage block sits above the submit button.
+
+### The measurement
+
+The `[tier: MEASURED]` box carries a real scale-referenced height, or a real
+refusal. It needs a pixels-per-millimetre factor from a completed scale
+session, entered on the upload form with the artifact it came from and that
+artifact's tier. **There is no DPI fallback**: without a scale reference the
+box says so and no measurement is recorded, which is a correct outcome rather
+than a gap. `naive_vs_calibrated.py` is the argument for why.
+
+The region handed to the engine is drawn by the operator on the stored image
+and posted in image pixels. Where that boundary goes changes the measured
+height by ~0.0064 mm (`AUDIT-2026-09-12.md` §2.1), biased toward compliant.
+That is not in the uncertainty budget and is not folded into one; the region is
+recorded as a declared input instead, drawn on a copy of the evidence image,
+labelled "operator-declared region", and every re-measurement is appended
+rather than overwritten.
 
 ## Why this is not another OCR compliance app
 
@@ -72,7 +89,9 @@ This is a geometric fact, not a claim about anyone's software.
 The measurement, statutory, declaration, extraction and report layers are
 built and self-tested. **No part of this has met a camera.**
 
-The web application (chunk 4) is built: login, upload, results in three tiers,
-PDF/DOCX export, history with search, and a counts-only dashboard. The
-`measurements` table is deliberately left unpopulated -- chunk 5 wires the
-metrology engine into it; the read path is already in place and tested.
+The web application (chunks 4 and 5) is built: login, upload, results in three
+tiers, region selection, scale-referenced character-height measurement with its
+uncertainty, PDF/DOCX export, history with search, and a counts-only dashboard.
+
+Still true, and unchanged by any of it: **no part of this has met a camera.**
+The scale factor is operator-entered from a session the rig has not yet run.

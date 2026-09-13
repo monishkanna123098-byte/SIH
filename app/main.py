@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from urllib.parse import quote
 from typing import Optional
 
 from fastapi import FastAPI, Form, Request, UploadFile, File
@@ -92,7 +93,8 @@ def upload_form(request: Request):
     return _render(request, "upload.html", user,
                    fields=service.declaration_fields(),
                    panels=service.PANELS, categories=service.CATEGORIES,
-                   values={}, form={})
+                   commodity_classes=service.COMMODITY_CLASSES,
+                   min_ppm=service.MIN_PX_PER_MM, values={}, form={})
 
 
 @app.post("/upload", response_class=HTMLResponse)
@@ -102,6 +104,11 @@ async def upload(request: Request,
                  declared_pdp_area_cm2: str = Form(""),
                  operator_id: str = Form(""),
                  coverage_note: str = Form(""),
+                 declared_commodity_class: str = Form(""),
+                 declared_glyph_count: str = Form(""),
+                 scale_ppm: str = Form(""),
+                 scale_artifact: str = Form(""),
+                 scale_artifact_tier: str = Form(""),
                  image: UploadFile | None = File(None)):
     user = auth.current_user(request)
     if user is None:
@@ -116,12 +123,19 @@ async def upload(request: Request,
         return _render(request, "upload.html", user,
                        fields=service.declaration_fields(),
                        panels=service.PANELS, categories=service.CATEGORIES,
+                       commodity_classes=service.COMMODITY_CLASSES,
+                       min_ppm=service.MIN_PX_PER_MM,
                        values=values, error=error,
                        form={"product_name": product_name,
                              "declared_category": declared_category,
                              "declared_pdp_area_cm2": declared_pdp_area_cm2,
                              "operator_id": operator_id,
                              "coverage_note": coverage_note,
+                             "declared_commodity_class": declared_commodity_class,
+                             "declared_glyph_count": declared_glyph_count,
+                             "scale_ppm": scale_ppm,
+                             "scale_artifact": scale_artifact,
+                             "scale_artifact_tier": scale_artifact_tier,
                              "panels": panels, "examined": examined})
 
     if not product_name.strip():
@@ -138,6 +152,30 @@ async def upload(request: Request,
 
     if declared_category and declared_category not in service.CATEGORIES:
         return again("Unrecognised declared category.")
+
+    if (declared_commodity_class
+            and declared_commodity_class not in service.COMMODITY_CLASSES):
+        return again("Unrecognised commodity class.")
+
+    glyphs: Optional[int] = None
+    if declared_glyph_count.strip():
+        try:
+            glyphs = int(declared_glyph_count)
+        except ValueError:
+            return again("Expected glyph count must be a whole number.")
+        if glyphs <= 0:
+            return again("Expected glyph count must be greater than zero.")
+
+    # px/mm. There is no DPI fallback and no default: without a scale reference
+    # there is no measurement, and that is a correct outcome rather than a gap.
+    ppm: Optional[float] = None
+    if scale_ppm.strip():
+        try:
+            ppm = float(scale_ppm)
+        except ValueError:
+            return again("Scale must be a number, in pixels per millimetre.")
+        if ppm <= 0:
+            return again("Scale must be greater than zero pixels per millimetre.")
 
     # An unticked box with an operator id is coherent; a ticked box without one
     # is not -- `can_assert_absence()` needs both, and silently accepting the
@@ -164,7 +202,10 @@ async def upload(request: Request,
         user=user, product_name=product_name, values=values, panels=panels,
         examined=examined, operator_id=operator_id, note=coverage_note,
         declared_category=declared_category, declared_pdp_area_cm2=area,
-        image_path=image_path)
+        image_path=image_path, scale_ppm=ppm, scale_artifact=scale_artifact,
+        scale_artifact_tier=scale_artifact_tier,
+        declared_commodity_class=declared_commodity_class,
+        declared_glyph_count=glyphs)
     return RedirectResponse(f"/scan/{inspection_id}", status_code=303)
 
 
@@ -201,6 +242,32 @@ def determination(request: Request, inspection_id: str,
     return RedirectResponse(f"/scan/{inspection_id}", status_code=303)
 
 
+@app.post("/scan/{inspection_id}/measure")
+def measure(request: Request, inspection_id: str,
+            x: str = Form(""), y: str = Form(""),
+            w: str = Form(""), h: str = Form("")):
+    """Measure the operator-declared region.
+
+    The region arrives in IMAGE PIXEL coordinates. The browser scales from
+    display coordinates before posting -- getting that wrong shifts the number
+    in a way that is hard to see, so the conversion is done once, next to the
+    canvas, and the raw values are echoed back on the page.
+    """
+    user = auth.current_user(request)
+    if user is None:
+        return _login_redirect()
+    scan = service.get_scan(inspection_id)
+    if scan is None:
+        return RedirectResponse("/history", status_code=303)
+    if not auth.may_determine(user, scan["user_id"]):
+        return RedirectResponse(f"/scan/{inspection_id}?denied=1", status_code=303)
+    ok, message = service.measure_scan(inspection_id, (x, y, w, h))
+    if ok:
+        return RedirectResponse(f"/scan/{inspection_id}", status_code=303)
+    return RedirectResponse(
+        f"/scan/{inspection_id}?measure_error={quote(message)}", status_code=303)
+
+
 @app.get("/scan/{inspection_id}/image")
 def scan_image(request: Request, inspection_id: str):
     user = auth.current_user(request)
@@ -213,6 +280,26 @@ def scan_image(request: Request, inspection_id: str):
     # anyway so a hand-edited database row cannot read outside the directory.
     root = os.path.realpath(db.UPLOAD_DIR)
     path = os.path.realpath(os.path.join(root, os.path.basename(scan["image_path"])))
+    if not path.startswith(root + os.sep) or not os.path.exists(path):
+        return RedirectResponse(f"/scan/{inspection_id}", status_code=303)
+    return FileResponse(path)
+
+
+@app.get("/scan/{inspection_id}/image.roi")
+def scan_image_roi(request: Request, inspection_id: str):
+    """The evidence image with the operator-declared region drawn on it.
+
+    A separate file: the original evidence image is never written to.
+    """
+    user = auth.current_user(request)
+    if user is None:
+        return _login_redirect()
+    scan = service.get_scan(inspection_id)
+    if scan is None or not scan["image_annotated_path"]:
+        return RedirectResponse(f"/scan/{inspection_id}", status_code=303)
+    root = os.path.realpath(db.UPLOAD_DIR)
+    path = os.path.realpath(
+        os.path.join(root, os.path.basename(scan["image_annotated_path"])))
     if not path.startswith(root + os.sep) or not os.path.exists(path):
         return RedirectResponse(f"/scan/{inspection_id}", status_code=303)
     return FileResponse(path)
