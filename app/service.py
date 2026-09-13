@@ -383,6 +383,91 @@ def _measurement_view(rec, scan: dict) -> dict:
     return base
 
 
+# --------------------------------------------------------------------------
+# The pipeline strip
+# --------------------------------------------------------------------------
+# Five stages, each reflecting STORED RECORD STATE -- never a timer, never a
+# guess. A stage that was skipped reads `pending`, not `done`.
+#
+# Stage 02 exists because this instrument has a scale reference. Nothing else
+# on this problem statement does, which is why it gets the same width as every
+# other stage and is never hidden when empty: "no scale reference -- height
+# cannot be measured" is a true and useful statement, and the one stage a
+# competitor cannot draw at all.
+PIPELINE_STAGES = (("01", "CAPTURE"), ("02", "CALIBRATE"), ("03", "EXTRACT"),
+                   ("04", "MEASURE"), ("05", "ADJUDICATE"))
+
+
+def _pipeline(rec, scan: dict, mview: dict, summary: dict) -> list[dict]:
+    """Where this inspection actually is. Three states: pending, done, refused."""
+
+    def stage(n, name, state, lines, note=""):
+        return {"n": n, "name": name, "state": state,
+                "lines": [l for l in lines if l], "note": note}
+
+    out = []
+
+    # 01 CAPTURE ----------------------------------------------------------
+    coverage_status = ("physical package examined"
+                       if scan["coverage_examined"] else "images only")
+    panels = scan["coverage_panels"] or ""
+    if scan["image_path"]:
+        out.append(stage("01", "CAPTURE", "done", [
+            "image received",
+            f"panels: {panels or 'none declared'}",
+            f"coverage: {coverage_status}"]))
+    else:
+        out.append(stage("01", "CAPTURE", "pending", [
+            f"panels: {panels or 'none declared'}",
+            f"coverage: {coverage_status}"], "awaiting image"))
+
+    # 02 CALIBRATE --------------------------------------------------------
+    if scan["scale_ppm"] is not None:
+        out.append(stage("02", "CALIBRATE", "done", [
+            f"{scan['scale_ppm']:.6g} px/mm",
+            f"artifact: {scan['scale_artifact'] or 'not described'}",
+            f"tier: {scan['scale_artifact_tier'] or 'not stated'}"]))
+    else:
+        out.append(stage("02", "CALIBRATE", "pending", [],
+                         "no scale reference -- height cannot be measured"))
+
+    # 03 EXTRACT ----------------------------------------------------------
+    read = sum(1 for f in rec.findings if f.detected)
+    extractors = sorted({f.extractor for f in rec.findings if f.extractor})
+    if rec.findings:
+        out.append(stage("03", "EXTRACT", "done", [
+            f"{read} of {len(rec.findings)} declarations read",
+            f"via {', '.join(extractors) or 'unspecified'}"]))
+    else:
+        out.append(stage("03", "EXTRACT", "pending", [], "awaiting declarations"))
+
+    # 04 MEASURE ----------------------------------------------------------
+    if mview.get("state") != "measured":
+        out.append(stage("04", "MEASURE", "pending", [], "not measured"))
+    elif rec.measurement.band == rep.BAND_REFER:
+        out.append(stage("04", "MEASURE", "refused",
+                         [mview.get("refusal_code")
+                          or "uncertainty band straddles the requirement"],
+                         mview.get("next_action", "")))
+    else:
+        out.append(stage("04", "MEASURE", "done", [
+            rec.measurement.band, mview.get("stated", "")]))
+
+    # 05 ADJUDICATE -------------------------------------------------------
+    counts = summary["counts"]
+    tally = (f"PASS {counts[VERDICT_PASS]}  FAIL {counts[VERDICT_FAIL]}  "
+             f"CANNOT DETERMINE {counts[VERDICT_CANNOT_DETERMINE]}")
+    if rec.determination is not None:
+        out.append(stage("05", "ADJUDICATE", "done", [
+            summary["headline"], tally,
+            f"determined by {rec.determination.officer_id}"]))
+    else:
+        out.append(stage("05", "ADJUDICATE", "pending",
+                         [summary["headline"], tally],
+                         "awaiting determination"))
+    return out
+
+
 def results_view(inspection_id: str) -> Optional[dict]:
     """Everything the results template needs, as plain data.
 
@@ -394,6 +479,7 @@ def results_view(inspection_id: str) -> Optional[dict]:
         return None
     rec = build_record(inspection_id)
     s = rec.summary()
+    mview = _measurement_view(rec, scan)
     return {
         "scan": scan,
         "headline": s["headline"],
@@ -405,7 +491,8 @@ def results_view(inspection_id: str) -> Optional[dict]:
             "tier": f.source_tier, "extractor": f.extractor,
             "chain": f.chain(),
         } for f in rec.findings],
-        "measurement": _measurement_view(rec, scan),
+        "measurement": mview,
+        "pipeline": _pipeline(rec, scan, mview, s),
         "determination": None if rec.determination is None else {
             "officer_id": rec.determination.officer_id,
             "verdict": rec.determination.verdict,

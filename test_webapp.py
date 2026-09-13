@@ -563,6 +563,153 @@ def main() -> int:
     ck("19.6 a zero-area region is refused",
        "measure_error" in measure(client, comp, (0, 0, 0, 0)).headers["location"])
 
+    # ======================================================================
+    # CHUNK 6 -- the pipeline strip
+    # ======================================================================
+    _css = open("app/static/app.css").read()
+    _pipe_raw = _css[_css.index("---- the pipeline strip"):]
+    # Strip comments before scanning. This block documents what it must NOT do
+    # ("never red", "No animation anywhere"), so a bare substring test over the
+    # raw text matches the prose rather than the rules.
+    _pipe_css = re.sub(r"/\*.*?\*/", "", "/*" + _pipe_raw, flags=re.S)
+
+    # comp was deliberately re-measured on a small crop in 19.2, so its LATEST
+    # measurement is that crop's verdict -- which is the append-not-overwrite
+    # behaviour working. A separate inspection is measured once, on the whole
+    # image, for the assertions about a resolved band.
+    pdone = create_measurable(client, target_mm=1.4, name="Pipeline done state")
+    measure(client, pdone, full_box(pdone))
+
+    def strip(iid):
+        return service.results_view(iid)["pipeline"]
+
+    def st(iid, name):
+        return next(x for x in strip(iid) if x["name"] == name)
+
+    # ---- 20. done 1: renders for every scan, at every degree of completeness
+    for iid, label in ((photo_only, "brand-new, nothing captured"),
+                       (full, "declarations only"),
+                       (comp, "measured"),
+                       (near, "refused measurement"),
+                       (noscale, "no scale reference")):
+        p_ = strip(iid)
+        ck(f"20.1 strip renders for a {label} inspection", len(p_) == 5,
+           f"{len(p_)} stages")
+        ck(f"20.2 stage order is fixed for a {label} inspection",
+           [x["name"] for x in p_] == ["CAPTURE", "CALIBRATE", "EXTRACT",
+                                       "MEASURE", "ADJUDICATE"],
+           str([x["name"] for x in p_]))
+        ck(f"20.3 every stage carries one of the three states ({label})",
+           all(x["state"] in ("pending", "done", "refused") for x in p_))
+
+    ck("20.4 the strip is on the results page",
+       'class="pipeline"' in client.get(f"/scan/{comp}").text)
+    ck("20.5 the strip sits above the three tier sections",
+       client.get(f"/scan/{comp}").text.index('class="pipeline"')
+       < client.get(f"/scan/{comp}").text.index("[tier: EXTRACTED]"))
+
+    # ---- 21. done 2: CALIBRATE, empty, at full weight ---------------------
+    cal = st(noscale, "CALIBRATE")
+    ck("21.1 no scale reference -> CALIBRATE is pending",
+       cal["state"] == "pending", str(cal["state"]))
+    ck("21.2 CALIBRATE explains itself when empty",
+       "no scale reference" in cal["note"]
+       and "cannot be measured" in cal["note"], cal["note"])
+    npage = client.get(f"/scan/{noscale}").text
+    ck("21.3 the empty CALIBRATE stage is rendered, not hidden",
+       "no scale reference -- height cannot be measured" in npage)
+    ck("21.4 every stage is flex: 1 1 0 -- CALIBRATE is not narrowed",
+       "flex: 1 1 0" in _pipe_css
+       and "nth-child" not in _pipe_css, "a stage is being sized specially")
+    ck("21.5 nothing hides or collapses a stage",
+       "display: none" not in _pipe_css and "visibility: hidden" not in _pipe_css)
+    ck("21.6 a populated CALIBRATE shows px/mm, artifact and tier",
+       any("px/mm" in l for l in st(comp, "CALIBRATE")["lines"])
+       and any("artifact:" in l for l in st(comp, "CALIBRATE")["lines"])
+       and any("tier:" in l for l in st(comp, "CALIBRATE")["lines"]),
+       str(st(comp, "CALIBRATE")["lines"]))
+
+    # ---- 22. done 3: a refused measurement, in cream, not red ------------
+    ck("22.1 a straddle shows MEASURE refused",
+       st(near, "MEASURE")["state"] == "refused", str(st(near, "MEASURE")))
+    ck("22.2 the reason is shown",
+       any("straddles" in l or l for l in st(near, "MEASURE")["lines"]))
+    ck("22.3 a disputed threshold shows its code in the strip",
+       "THRESHOLD_DISPUTED" in " ".join(st(disp, "MEASURE")["lines"]),
+       str(st(disp, "MEASURE")["lines"]))
+    ck("22.4 an image-quality refusal shows its code",
+       "CONTRAST" in " ".join(st(lowc, "MEASURE")["lines"]))
+    ck("22.5 the refused stage is cream, not red",
+       "var(--measured-bg)" in _pipe_css and "--fail-bg" not in _pipe_css
+       and not re.search(r":\s*red\b|#[fF][0-9a-fA-F]{0,1}[0-9a-fA-F]"
+                         r"[0-9a-fA-F]{0,1}[0-9a-fA-F]{0,2}\s*;\s*$", _pipe_css),
+       "a red value reached the strip")
+    ck("22.6 a resolved measurement shows the band, not a refusal",
+       st(pdone, "MEASURE")["state"] == "done"
+       and "COMPLIANT" in " ".join(st(pdone, "MEASURE")["lines"]),
+       str(st(pdone, "MEASURE")))
+
+    # ---- 23. skipped is pending, never done -----------------------------
+    blank_strip = {x["name"]: x["state"] for x in strip(photo_only)}
+    ck("23.1 no image -> CAPTURE pending", blank_strip["CAPTURE"] == "pending")
+    ck("23.2 no scale -> CALIBRATE pending", blank_strip["CALIBRATE"] == "pending")
+    ck("23.3 no measurement -> MEASURE pending", blank_strip["MEASURE"] == "pending")
+    ck("23.4 extraction did run -> EXTRACT done", blank_strip["EXTRACT"] == "done")
+    ck("23.5 EXTRACT reports how many were actually read",
+       "0 of 6 declarations read" in " ".join(st(photo_only, "EXTRACT")["lines"]),
+       str(st(photo_only, "EXTRACT")["lines"]))
+    ck("23.6 a full read reports six",
+       "6 of 6 declarations read" in " ".join(st(full, "EXTRACT")["lines"]),
+       str(st(full, "EXTRACT")["lines"]))
+    ck("23.7 ADJUDICATE is pending until an officer has ruled",
+       st(comp, "ADJUDICATE")["state"] == "pending"
+       and "awaiting determination" in st(comp, "ADJUDICATE")["note"])
+    ck("23.8 ADJUDICATE is done once a determination exists",
+       st(full, "ADJUDICATE")["state"] == "done", str(st(full, "ADJUDICATE")))
+    ck("23.9 ADJUDICATE carries the headline and three counts",
+       any("PASS" in l and "FAIL" in l and "CANNOT DETERMINE" in l
+           for l in st(full, "ADJUDICATE")["lines"]),
+       str(st(full, "ADJUDICATE")["lines"]))
+
+    # ---- 24. what the strip must NOT do ---------------------------------
+    spage = client.get(f"/scan/{comp}").text
+    _strip_html = spage[spage.index('class="pipeline"'):spage.index("</ol>")]
+    ck("24.1 no percentage in the strip", not pct.search(_strip_html))
+    ck("24.2 no progress bar or ring",
+       "<progress" not in _strip_html and "ring" not in _strip_html.lower()
+       and "progress" not in _pipe_css.lower())
+    ck("24.3 no tick or cross characters",
+       not any(c in _strip_html for c in ("\u2713", "\u2714", "\u2717",
+                                          "\u2718", "\u2715")))
+    ck("24.4 no sixth stage and no penalty stage",
+       len(service.PIPELINE_STAGES) == 5
+       and "PENALTY" not in _strip_html.upper()
+       and "penalty" not in open("app/service.py").read().lower())
+    ck("24.5 stage state comes from the record, not a timer",
+       "setTimeout" not in _pipe_css and "setInterval" not in open(
+           "app/static/roi.js").read())
+
+    # ---- 25. responsive, motion, dependencies ---------------------------
+    ck("25.1 stacks vertically below 700px",
+       "@media (max-width: 700px)" in _pipe_css)
+    ck("25.2 the arrows are dropped when stacked",
+       "content: none" in _pipe_css)
+    ck("25.3 nothing in the strip animates, so there is nothing to suppress",
+       "transition" not in _pipe_css and "animation" not in _pipe_css
+       and "@keyframes" not in _pipe_css)
+    reqs = open("requirements.txt").read()
+    ck("25.4 no new dependency was added",
+       [l.strip() for l in reqs.splitlines()
+        if l.strip() and not l.startswith("#")]
+       == ["fastapi", "uvicorn", "jinja2", "python-multipart", "reportlab",
+           "python-docx", "numpy", "scipy", "opencv-python-headless", "pillow",
+           "httpx"],
+       str([l.strip() for l in reqs.splitlines()
+            if l.strip() and not l.startswith("#")]))
+    ck("25.5 the strip fetches nothing",
+       "http://" not in _pipe_css and "https://" not in _pipe_css
+       and "@import" not in _pipe_css)
+
     print("=" * 74)
     for f in fails:
         print("FAIL:", f)

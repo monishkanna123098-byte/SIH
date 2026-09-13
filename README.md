@@ -30,7 +30,7 @@ hosting. "Web application" is satisfied by a browser pointed at localhost.
 
 ```bash
 ./run.sh                 # http://localhost:8000
-python3 test_webapp.py   # 127 checks, 0 failed
+python3 test_webapp.py   # 175 checks, 0 failed
 ```
 
 Seeded users, one per role: `officer` / `officer-2026` and
@@ -45,6 +45,24 @@ declarations from images alone are six CANNOT_DETERMINE; the same six blanks
 are six FAIL only once a named operator states they examined the physical
 package. That difference is invariant 2, and it is the whole reason the
 coverage block sits above the submit button.
+
+### The pipeline strip
+
+Five stages across the top of every results page:
+
+```
+01 CAPTURE -> 02 CALIBRATE -> 03 EXTRACT -> 04 MEASURE -> 05 ADJUDICATE
+```
+
+Server-rendered from the stored record -- each stage shows what is actually on
+the record, never a timer. A stage that was skipped reads `pending`, not
+`done`; a refused measurement reads `refused` in cream, never red.
+
+`02 CALIBRATE` gets the same width as every other stage and is never hidden
+when empty, which is most of the time: a scale reference is the thing most
+inspections lack. "No scale reference -- height cannot be measured" is a true
+statement, and it is the one stage nothing else on this problem statement can
+draw at all.
 
 ### The measurement
 
@@ -89,9 +107,10 @@ This is a geometric fact, not a claim about anyone's software.
 The measurement, statutory, declaration, extraction and report layers are
 built and self-tested. **No part of this has met a camera.**
 
-The web application (chunks 4 and 5) is built: login, upload, results in three
-tiers, region selection, scale-referenced character-height measurement with its
-uncertainty, PDF/DOCX export, history with search, and a counts-only dashboard.
+The web application (chunks 4, 5 and 6) is built: login, upload, a five-stage
+pipeline strip, results in three tiers, region selection, scale-referenced
+character-height measurement with its uncertainty, PDF/DOCX export, history
+with search, and a counts-only dashboard.
 
 Still true, and unchanged by any of it: **no part of this has met a camera.**
 The scale factor is operator-entered from a session the rig has not yet run.

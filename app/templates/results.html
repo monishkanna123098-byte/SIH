@@ -13,6 +13,30 @@
   <span>CANNOT DETERMINE <b>{{ v.counts.CANNOT_DETERMINE }}</b></span>
 </div>
 
+{# ---- The pipeline strip. Server-rendered from the stored record: each stage
+   reflects what is actually on the record, never a timer and never a guess. A
+   stage that was skipped reads `pending`, not `done`.
+
+   CALIBRATE gets the same width as every other stage and is never hidden when
+   empty. It will often be the emptiest one -- a scale reference is the thing
+   most inspections lack -- and "no scale reference" is both true and the one
+   stage nothing else on this problem statement can draw at all.
+
+   No percentage, no progress bar, no completion ring (invariant 4). No ticks
+   and no crosses: two colours collapse three states (invariant 1). #}
+<ol class="pipeline">
+  {% for st in v.pipeline %}
+  <li class="stage s-{{ st.state }}">
+    <div class="st-head"><span class="st-n">{{ st.n }}</span>
+      <span class="st-name">{{ st.name }}</span></div>
+    {% for line in st.lines %}
+    <div class="st-val">{{ line }}</div>
+    {% endfor %}
+    {% if st.note %}<div class="st-note">{{ st.note }}</div>{% endif %}
+  </li>
+  {% endfor %}
+</ol>
+
 <table class="meta">
   <tr><th>Product</th><td>{{ v.scan.product_name }}</td>
       <th>Inspected on</th><td>{{ v.scan.created_at }}</td></tr>
