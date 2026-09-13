@@ -567,7 +567,14 @@ def main() -> int:
     # CHUNK 6 -- the pipeline strip
     # ======================================================================
     _css = open("app/static/app.css").read()
-    _pipe_raw = _css[_css.index("---- the pipeline strip"):]
+    # Bounded at the landing-page block. This slice used to run to EOF, which
+    # was fine while the strip was the last thing in the file; the landing
+    # styles now sit after it, and its transitions and mobile `display: none`
+    # are not the strip's. The assertions below are unchanged -- they still
+    # test the strip's own rules.
+    _pipe_start = _css.index("---- the pipeline strip")
+    _pipe_end = _css.index("LANDING PAGE", _pipe_start)
+    _pipe_raw = _css[_pipe_start:_pipe_end]
     # Strip comments before scanning. This block documents what it must NOT do
     # ("never red", "No animation anywhere"), so a bare substring test over the
     # raw text matches the prose rather than the rules.
@@ -1146,6 +1153,152 @@ def main() -> int:
     ck("34.32 lm_extract.py was not touched",
        "asserts_absent=False,        # see docstring. Never True here."
        in open("lm_extract.py").read())
+
+    # ======================================================================
+    # THE LANDING PAGE
+    # ======================================================================
+    from app import main as _main
+    # From the opening `/*`, not from the word itself -- otherwise the header
+    # comment is unterminated and the comment-stripper below cannot match it.
+    _lp_css = _css[_css.rindex("/*", 0, _css.index("LANDING PAGE")):]
+    _lp_js = open("app/static/landing.js").read()
+
+    anon_lp = TestClient(app).get("/")
+    lp = anon_lp.text
+    ck("36.1 / serves a page, not a redirect",
+       anon_lp.status_code == 200 and "<!DOCTYPE html>" in lp,
+       f"HTTP {anon_lp.status_code}")
+    ck("36.2 it renders for a signed-out visitor",
+       "Sign in" in lp and "lp-hero" in lp)
+    lp_in = client.get("/").text
+    ck("36.3 a signed-in officer gets a console CTA instead",
+       "Open the console" in lp_in and "/upload" in lp_in)
+    ck("36.4 the application pages are untouched",
+       "lp-" not in client.get("/upload").text
+       and "lp-" not in client.get(f"/scan/{comp}").text)
+
+    # ---- content ---------------------------------------------------------
+    ck("36.5 every feature card renders",
+       all(c["title"] in lp for c in _main.LANDING_FEATURES),
+       "a feature card is missing")
+    ck("36.6 both faces are in the markup, so the back is real content",
+       all(c["back"][:40] in lp for c in _main.LANDING_FEATURES))
+    ck("36.7 all three tiers are shown, styled unlike each other",
+       all(t["name"] in lp for t in _main.LANDING_TIERS)
+       and all(f"lp-tier-{t['slug']}" in _lp_css for t in _main.LANDING_TIERS))
+    ck("36.8 the five pipeline stages are shown",
+       all(st["name"] in lp for st in _main.LANDING_STAGES))
+    ck("36.9 CALIBRATE is the one marked as the differentiator",
+       [st["name"] for st in _main.LANDING_STAGES if st["key"]] == ["CALIBRATE"])
+
+    # ---- the invariants still hold on the public page --------------------
+    # Stripped to visible text first: the only "%" in the source are the CSS
+    # bar widths in `style="--w: 100%"`, which are layout, not a score. The
+    # invariant is about what a reader sees.
+    _lp_text = re.sub(r"<[^>]+>", " ", re.sub(r"<(script|style)[^>]*>.*?</\1>",
+                                              " ", lp, flags=re.S))
+    ck("36.10 no percentage figure in the landing page's visible text",
+       not pct.search(_lp_text), str(pct.findall(_lp_text)))
+    ck("36.10b the only percentages in the source are CSS bar widths",
+       all(m in ("100%", "3%") for m in pct.findall(lp)), str(pct.findall(lp)))
+    ck("36.11 no compliance score, rate or grade is claimed",
+       not re.search(r"compliance (score|rate|grade)", lp, re.I)
+       or "no compliance score, percentage or grade" in lp)
+    ck("36.12 no tick or cross characters",
+       not any(c in lp for c in ("\u2713", "\u2714", "\u2717", "\u2718", "\u2715")))
+    ck("36.13 the three-state position is stated in words",
+       "CANNOT" in lp and "not recorded as" in lp)
+    ck("36.14 a height is never shown without its uncertainty",
+       "1.15 mm" in lp and "0.17 mm" in lp and "k=2" in lp)
+    ck("36.15 the hash is not called a signature",
+       "not a digital signature" in lp.lower() or "tamper-evident" in lp.lower())
+
+    # ---- the emblem prohibition -----------------------------------------
+    ck("36.16 no emblem, flag or ministry attribution",
+       not re.search(r"state emblem|ashoka|national flag|government of india"
+                     r"|ministry of", re.sub(r"<!--.*?-->", "", lp, flags=re.S)
+                     .replace("{#", "").split("</head>")[-1], re.I))
+
+    # ---- offline and dependencies ---------------------------------------
+    ck("36.17 the landing page fetches nothing at runtime",
+       not re.search(r"https?://", lp) and "cdn" not in lp.lower())
+    ck("36.18 no CDN font or stylesheet in the landing CSS",
+       "@import" not in _lp_css and "http" not in _lp_css)
+    ck("36.19 no new dependency was added",
+       [l.strip() for l in open("requirements.txt").read().splitlines()
+        if l.strip() and not l.startswith("#")] == _req_lines)
+    # The intent is "no library", not "one script tag". There are two scripts:
+    # a one-line inline marker in <head> and the local landing.js.
+    _srcs = re.findall(r'<script[^>]*\bsrc="([^"]+)"', lp)
+    ck("36.20 no library is loaded -- every script is local and first-party",
+       _srcs == ["/static/landing.js"]
+       and not re.search(r"three(\.min)?\.js|unpkg|jsdelivr|cdnjs", lp, re.I),
+       str(_srcs))
+    ck("36.20b the inline script only sets the JS marker",
+       len(re.findall(r"<script(?![^>]*\bsrc=)", lp)) == 1
+       and 'className += " lp-js"' in lp)
+
+    # ---- accessibility ---------------------------------------------------
+    ck("36.21 exactly one h1", lp.count("<h1") == 1, str(lp.count("<h1")))
+    ck("36.22 headings do not skip a level",
+       lp.count("<h3") == 0 or lp.count("<h2") > 0)
+    ck("36.23 a skip link is the first focusable element",
+       lp.index("lp-skip") < lp.index("lp-nav"))
+    ck("36.24 flip cards are buttons, so they are keyboard reachable",
+       lp.count('class="lp-flip"') == len(_main.LANDING_FEATURES)
+       and lp.count('<button class="lp-flip" type="button" aria-expanded="false"')
+       == len(_main.LANDING_FEATURES))
+    ck("36.25 the mobile toggle is labelled and reports its state",
+       'aria-expanded="false"' in lp and 'aria-controls="lp-menu"' in lp
+       and "aria-label=" in lp)
+    ck("36.26 the decorative canvas is hidden from assistive tech",
+       'id="lp-canvas"' in lp and 'aria-hidden="true"' in lp)
+    ck("36.27 visible focus states are defined",
+       ":focus-visible" in _lp_css)
+    ck("36.28 nav landmarks are semantic",
+       "<nav" in lp and "<main" in lp and "<footer" in lp and "<header" in lp)
+
+    # ---- motion and performance -----------------------------------------
+    ck("36.29 prefers-reduced-motion is honoured in CSS",
+       "prefers-reduced-motion" in _lp_css
+       and ".lp-js .lp-reveal { opacity: 1; transform: none; }" in _lp_css)
+    ck("36.30 and in JS -- reveals fall back to visible, canvas does not run",
+       "prefers-reduced-motion" in _lp_js and "reduce" in _lp_js)
+    ck("36.30b with JS off, nothing is hidden -- the page is not blank",
+       ".lp-js .lp-reveal {" in _lp_css
+       and "\n.lp-reveal {" not in _lp_css
+       and 'className += " lp-js"' in lp,
+       "content would be invisible without JS")
+    ck("36.31 no scroll handler runs on every frame",
+       'addEventListener("scroll"' not in _lp_js and "onscroll" not in _lp_js)
+    ck("36.32 reveals happen once, then stop observing",
+       "unobserve" in _lp_js)
+    ck("36.33 the canvas stops when hidden or scrolled past",
+       "visibilitychange" in _lp_js and "cancelAnimationFrame" in _lp_js)
+
+    # ---- the styles cannot reach the application -------------------------
+    _lp_rules = re.sub(r"/\*(?:.|\n)*?\*/", "", _lp_css)
+    # The first character must not be whitespace either, or the newline before
+    # an `@media` gets captured and the at-rule looks like a bare selector.
+    _lp_sels = re.findall(r"(?:^|[};])\s*([^{};@\s][^{};]*?)\s*\{", _lp_rules)
+    _leaks = []
+    for _sel in _lp_sels:
+        _depth, _cur, _parts = 0, "", []
+        for _ch in _sel:
+            if _ch == "(":
+                _depth += 1
+            if _ch == ")":
+                _depth -= 1
+            if _ch == "," and _depth == 0:
+                _parts.append(_cur)
+                _cur = ""
+            else:
+                _cur += _ch
+        _parts.append(_cur)
+        _leaks += [x.strip() for x in _parts
+                   if x.strip() and not x.strip().startswith(".lp")]
+    ck("36.34 every landing selector is namespaced under .lp",
+       not _leaks, str(sorted(set(_leaks))[:4]))
 
     print("=" * 74)
     for f in fails:

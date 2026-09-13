@@ -1,0 +1,282 @@
+{# The public landing page. Standalone chrome -- it does not extend base.html,
+   because the signed-in application deliberately looks like an instrument and
+   this page deliberately looks like a front door.
+
+   No State Emblem of India, no national flag, no "Government of India" or
+   ministry attribution. Use of the emblem is restricted under the State Emblem
+   of India (Prohibition of Improper Use) Act, 2005.
+
+   Everything here uses the application's existing colour tokens. Nothing is
+   fetched at runtime: no CDN font, no CDN stylesheet, no icon library. #}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Legal Metrology inspection instrument &mdash; scale-referenced character height</title>
+<meta name="description" content="An inspection instrument for the Legal
+  Metrology (Packaged Commodities) Rules, 2011. Measures character height
+  against a scale reference with a stated uncertainty, and refuses to answer
+  when an image cannot settle the question.">
+<link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTIiIGZpbGw9IiMwQTE2MjgiLz48dGV4dCB4PSIzMiIgeT0iNDQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiNmZmZmZmYiIGZvbnQtZmFtaWx5PSJHZW9yZ2lhLHNlcmlmIiBmb250LXNpemU9IjI4IiBmb250LXdlaWdodD0iNzAwIj5MTTwvdGV4dD48L3N2Zz4=">
+<script>document.documentElement.className += " lp-js";</script>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="lp">
+
+<canvas id="lp-canvas" class="lp-canvas" aria-hidden="true"></canvas>
+
+<a class="lp-skip" href="#lp-main">Skip to content</a>
+
+<header class="lp-nav" id="lp-nav">
+  <div class="lp-nav-inner">
+    <a class="lp-brand" href="/" aria-label="Home">
+      <span class="lp-mark" aria-hidden="true">LM</span>
+      <span class="lp-brand-text">
+        <span class="lp-brand-name">Legal Metrology</span>
+        <span class="lp-brand-sub">Inspection instrument</span>
+      </span>
+    </a>
+
+    <button class="lp-burger" id="lp-burger" type="button"
+            aria-expanded="false" aria-controls="lp-menu"
+            aria-label="Open navigation">
+      <span aria-hidden="true"></span>
+      <span aria-hidden="true"></span>
+      <span aria-hidden="true"></span>
+    </button>
+
+    <nav class="lp-menu" id="lp-menu" aria-label="Primary">
+      <a href="#what">What it does</a>
+      <a href="#method">Method</a>
+      <a href="#evidence">Evidence</a>
+      <a href="#pipeline">Pipeline</a>
+      {% if user %}
+      <a class="lp-btn lp-btn-primary" href="/upload">Open the console</a>
+      {% else %}
+      <a class="lp-btn lp-btn-primary" href="/login">Sign in</a>
+      {% endif %}
+    </nav>
+  </div>
+</header>
+
+<main id="lp-main">
+
+<!-- ---------------------------------------------------------------- hero -->
+<section class="lp-hero">
+  <div class="lp-wrap lp-hero-grid">
+    <div class="lp-hero-copy">
+      <p class="lp-eyebrow lp-reveal">Packaged Commodities Rules, 2011</p>
+      <h1 class="lp-h1 lp-reveal lp-d1">
+        It measures character height.<br>
+        <span class="lp-accent">Most instruments only guess it.</span>
+      </h1>
+      <p class="lp-lede lp-reveal lp-d2">
+        A height in pixels becomes a height in millimetres only through a
+        pixels-per-millimetre factor. With nothing of known size in the frame,
+        that factor has to be assumed &mdash; and an assumed factor is wrong by
+        however far the camera has moved. This instrument measures against a
+        scale reference, states its uncertainty, and refuses to rule when the
+        image cannot settle the question.
+      </p>
+      <div class="lp-cta lp-reveal lp-d3">
+        {% if user %}
+        <a class="lp-btn lp-btn-primary lp-btn-lg" href="/upload">Open the console</a>
+        {% else %}
+        <a class="lp-btn lp-btn-primary lp-btn-lg" href="/login">Sign in to inspect</a>
+        {% endif %}
+        <a class="lp-btn lp-btn-ghost lp-btn-lg" href="#method">See the method</a>
+      </div>
+      <dl class="lp-stats lp-reveal lp-d4">
+        <div><dt>Calibrated spread</dt><dd>0.0012<span>mm</span></dd></div>
+        <div><dt>Assumed-scale spread</dt><dd>0.42<span>mm</span></dd></div>
+        <div><dt>States per finding</dt><dd>3<span>never 2</span></dd></div>
+      </dl>
+    </div>
+
+    <!-- the specimen card: a real reading, in the app's own MEASURED styling -->
+    <aside class="lp-specimen lp-reveal lp-d2" aria-label="Example measurement">
+      <div class="lp-specimen-head">
+        <span>Character height &mdash; Rule 7(2)</span>
+        <span class="lp-tier">tier: MEASURED</span>
+      </div>
+      <div class="lp-specimen-body">
+        <p class="lp-specimen-verdict">INDETERMINATE</p>
+        <p class="lp-specimen-value">1.15 mm <span>&plusmn;</span> 0.17 mm <span>(k=2)</span></p>
+        <p class="lp-specimen-note">
+          The measured band [0.98, 1.32]&nbsp;mm straddles the 1.00&nbsp;mm
+          requirement. This instrument will not issue a verdict from an image
+          in this case.
+        </p>
+        <p class="lp-specimen-next">Next: refer for physical verification.</p>
+      </div>
+      <div class="lp-specimen-foot">
+        <span>Threshold source</span><span>AGGREGATOR / UNVERIFIED</span>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------- what it does -->
+<section class="lp-section" id="what">
+  <div class="lp-wrap">
+    <header class="lp-sec-head lp-reveal">
+      <p class="lp-eyebrow">What it does</p>
+      <h2 class="lp-h2">Six declarations, one measurement, and an officer's call</h2>
+      <p class="lp-sec-lede">
+        Every finding carries where it came from. Hover or focus a card to see
+        why that matters.
+      </p>
+    </header>
+
+    <ul class="lp-cards" role="list">
+      {% for c in features %}
+      <li class="lp-card-slot lp-reveal" style="--d: {{ loop.index0 * 70 }}ms">
+        <button class="lp-flip" type="button" aria-expanded="false">
+          <span class="lp-flip-inner">
+            <span class="lp-face lp-face-front">
+              <span class="lp-card-rule" aria-hidden="true"></span>
+              <span class="lp-card-kicker">{{ c.kicker }}</span>
+              <span class="lp-card-title">{{ c.title }}</span>
+              <span class="lp-card-front-text">{{ c.front }}</span>
+              <span class="lp-card-more">Details</span>
+            </span>
+            <span class="lp-face lp-face-back">
+              <span class="lp-card-title">{{ c.title }}</span>
+              <span class="lp-card-back-text">{{ c.back }}</span>
+            </span>
+          </span>
+        </button>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+
+<!-- -------------------------------------------------------------- method -->
+<section class="lp-section lp-section-alt" id="method">
+  <div class="lp-wrap lp-split">
+    <div class="lp-reveal">
+      <p class="lp-eyebrow">The method</p>
+      <h2 class="lp-h2">One packet, three camera distances</h2>
+      <p class="lp-body">
+        An estimator calibrated once and then trusted spreads
+        <strong>0.42&nbsp;mm</strong> across three distances and flips its
+        verdict from compliant to deficient. A scale-referenced measurement
+        spreads <strong>0.0012&nbsp;mm</strong> and returns the same answer
+        every time.
+      </p>
+      <p class="lp-body lp-muted">
+        This is a geometric fact, not a claim about anyone's software. It is
+        why the scale reference is mandatory here and why there is no fallback
+        that infers it from the image.
+      </p>
+    </div>
+
+    <figure class="lp-compare lp-reveal lp-d1">
+      <figcaption class="lp-compare-cap">Measured height across three distances</figcaption>
+      <div class="lp-bar-row">
+        <span class="lp-bar-label">Assumed scale</span>
+        <span class="lp-bar"><span class="lp-bar-fill lp-bar-wide" style="--w: 100%"></span></span>
+        <span class="lp-bar-val">0.42 mm</span>
+      </div>
+      <div class="lp-bar-row">
+        <span class="lp-bar-label">Scale-referenced</span>
+        <span class="lp-bar"><span class="lp-bar-fill lp-bar-narrow" style="--w: 3%"></span></span>
+        <span class="lp-bar-val">0.0012 mm</span>
+      </div>
+      <p class="lp-compare-foot">Lower is better. Bars to scale.</p>
+    </figure>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------ evidence -->
+<section class="lp-section" id="evidence">
+  <div class="lp-wrap">
+    <header class="lp-sec-head lp-reveal">
+      <p class="lp-eyebrow">Evidence</p>
+      <h2 class="lp-h2">Every line says where it came from</h2>
+    </header>
+    <div class="lp-tiers">
+      {% for t in tiers %}
+      <article class="lp-tier-card lp-tier-{{ t.slug }} lp-reveal"
+               style="--d: {{ loop.index0 * 90 }}ms">
+        <p class="lp-tier-label">{{ t.name }}</p>
+        <p class="lp-tier-what">{{ t.what }}</p>
+        <p class="lp-tier-note">{{ t.note }}</p>
+      </article>
+      {% endfor %}
+    </div>
+    <p class="lp-tier-caption lp-reveal">
+      These three are styled differently on purpose. A reading taken by a
+      machine, a measurement with an uncertainty, and a person's determination
+      are different kinds of claim, and the record should not let them look
+      alike.
+    </p>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------ pipeline -->
+<section class="lp-section lp-section-alt" id="pipeline">
+  <div class="lp-wrap">
+    <header class="lp-sec-head lp-reveal">
+      <p class="lp-eyebrow">How an inspection runs</p>
+      <h2 class="lp-h2">Five stages, and one that nothing else has</h2>
+    </header>
+    <ol class="lp-pipe" role="list">
+      {% for s in stages %}
+      <li class="lp-pipe-step{% if s.key %} lp-pipe-key{% endif %} lp-reveal"
+          style="--d: {{ loop.index0 * 80 }}ms">
+        <span class="lp-pipe-n">{{ "%02d"|format(loop.index) }}</span>
+        <span class="lp-pipe-name">{{ s.name }}</span>
+        <span class="lp-pipe-text">{{ s.text }}</span>
+      </li>
+      {% endfor %}
+    </ol>
+    <p class="lp-pipe-caption lp-reveal">
+      <strong>02 CALIBRATE</strong> is the stage an instrument without a scale
+      reference cannot draw at all. Without it, no height is measured &mdash;
+      and that is reported as a plain outcome, not hidden.
+    </p>
+  </div>
+</section>
+
+<!-- ---------------------------------------------------------------- foot -->
+<section class="lp-final">
+  <div class="lp-wrap lp-final-inner lp-reveal">
+    <h2 class="lp-h2">Ready to record an inspection?</h2>
+    <p class="lp-body">
+      The console runs locally. No internet connection is required at any point
+      in an inspection.
+    </p>
+    <div class="lp-cta">
+      {% if user %}
+      <a class="lp-btn lp-btn-primary lp-btn-lg" href="/upload">Open the console</a>
+      <a class="lp-btn lp-btn-ghost lp-btn-lg" href="/history">View history</a>
+      {% else %}
+      <a class="lp-btn lp-btn-primary lp-btn-lg" href="/login">Sign in</a>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="lp-foot">
+  <div class="lp-wrap lp-foot-inner">
+    <p>
+      This instrument reports three states per finding &mdash; PASS, FAIL and
+      CANNOT&nbsp;DETERMINE. A declaration it could not read is not recorded as
+      a violation. It issues no compliance score, percentage or grade.
+    </p>
+    <p class="lp-muted">
+      Character height is measured against a scale reference with a stated
+      uncertainty (k=2). Rule citations print only the part that has been read
+      from a primary source.
+    </p>
+  </div>
+</footer>
+
+<script src="/static/landing.js"></script>
+</body>
+</html>

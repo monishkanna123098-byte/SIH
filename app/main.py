@@ -81,9 +81,84 @@ def logout():
     return resp
 
 
-@app.get("/")
-def index():
-    return RedirectResponse("/upload", status_code=303)
+# Content for the landing page. Data, not markup, so the template stays a
+# template -- and so the copy can be checked by a test rather than eyeballed.
+LANDING_FEATURES = (
+    {"kicker": "Rule 6(1)", "title": "Three states, never two",
+     "front": "PASS, FAIL, and CANNOT DETERMINE.",
+     "back": "A declaration the software could not read is not a violation. "
+             "Collapsing three states into two turns every missed read into "
+             "an accusation against a named packer, so this instrument does "
+             "not do it -- at any layer, for any reason."},
+    {"kicker": "Rule 7(2)", "title": "Height, with its uncertainty",
+     "front": "Measured against a scale reference, stated as U at k=2.",
+     "back": "A height in pixels becomes millimetres only through a "
+             "pixels-per-millimetre factor. This instrument measures against "
+             "an artifact of known size in frame, and never prints a height "
+             "without the uncertainty that belongs to it."},
+    {"kicker": "Refusal", "title": "It says when it cannot tell",
+     "front": "An uncertainty band that straddles the threshold gets no verdict.",
+     "back": "When the measured band crosses the requirement, the honest "
+             "answer is that this image cannot settle it. You get a stated "
+             "reason and a next action -- refer for physical verification -- "
+             "not a confident number that happens to be wrong."},
+    {"kicker": "Coverage", "title": "Software never asserts absence",
+     "front": "Only a named officer who examined the package can claim it.",
+     "back": "A photograph shows a declaration was not in frame. It cannot "
+             "show it is not on the package. Those are different claims and "
+             "only the second is a violation, so absence is unlocked by a "
+             "human coverage declaration -- never by model confidence."},
+    {"kicker": "Provenance", "title": "Every line says where it came from",
+     "front": "EXTRACTED, MEASURED, or DETERMINED -- on the record and in the PDF.",
+     "back": "A machine reading, a scale-referenced measurement and an "
+             "officer's determination are different kinds of claim. The "
+             "record keeps them apart, and names the source tier of the "
+             "threshold it compared against."},
+    {"kicker": "Integrity", "title": "Tamper-evident, not signed",
+     "front": "SHA-256 over the canonical record, and it says so.",
+     "back": "The digest is taken over the inspection record, not the file. "
+             "Recompute it from an independently held copy to detect "
+             "alteration. It is a tamper-evident check and the report states "
+             "plainly that it is not a digital signature."},
+)
+
+LANDING_TIERS = (
+    {"slug": "extracted", "name": "EXTRACTED",
+     "what": "Read from an image by OCR or a vision model.",
+     "note": "Unverified. Confirm against the physical package before acting."},
+    {"slug": "measured", "name": "MEASURED",
+     "what": "A scale-referenced measurement with a stated uncertainty (k=2).",
+     "note": "Traceability status is stated alongside the value."},
+    {"slug": "determined", "name": "DETERMINED",
+     "what": "The inspecting officer's own determination.",
+     "note": "Overrides both of the above, and is recorded against their name."},
+)
+
+LANDING_STAGES = (
+    {"name": "CAPTURE", "key": False,
+     "text": "The image, the panels captured, and what was examined."},
+    {"name": "CALIBRATE", "key": True,
+     "text": "Pixels per millimetre, from a scale artifact of known size."},
+    {"name": "EXTRACT", "key": False,
+     "text": "The six mandatory declarations, with their source."},
+    {"name": "MEASURE", "key": False,
+     "text": "Character height on an operator-declared region."},
+    {"name": "ADJUDICATE", "key": False,
+     "text": "The officer's determination, recorded as its own tier."},
+)
+
+
+@app.get("/", response_class=HTMLResponse)
+def index(request: Request):
+    """The public landing page.
+
+    Previously a redirect to /upload, which meant the first thing anyone saw
+    was a login box. Signed-in users get a CTA straight into the console; the
+    application itself is unchanged behind it.
+    """
+    return _render(request, "landing.html", auth.current_user(request),
+                   features=LANDING_FEATURES, tiers=LANDING_TIERS,
+                   stages=LANDING_STAGES)
 
 
 # --------------------------------------------------------------------------
