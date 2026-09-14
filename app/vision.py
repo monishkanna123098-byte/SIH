@@ -34,6 +34,11 @@ ENV_KEY = "LM_VISION_API_KEY"
 ENV_MODEL = "LM_VISION_MODEL"
 ENV_BASE_URL = "LM_VISION_BASE_URL"
 
+# TEMPORARY, 14 Sep. Diagnostic only, off unless set, never read during an
+# inspection. Remove with _debug_hooks/_debug_exception once the 404 and the
+# reported transport failure are understood.
+ENV_DEBUG = "LM_VISION_DEBUG"
+
 PROVIDER_ANTHROPIC = "anthropic"
 PROVIDER_GEMINI = "gemini"
 PROVIDERS = (PROVIDER_ANTHROPIC, PROVIDER_GEMINI)
@@ -120,6 +125,71 @@ def _media_type(data: bytes) -> tuple[bytes, str]:
     return buf.getvalue(), "image/png"
 
 
+def _debug(line: str) -> None:
+    """TEMPORARY. One diagnostic line on stderr, never on the officer's screen."""
+    import sys
+    print("[vision-debug] " + line, file=sys.stderr, flush=True)
+
+
+def _redact(headers) -> dict:
+    """Header names and values, with anything credential-shaped removed.
+
+    The key is never printed, not even truncated: a prefix plus a length is
+    enough to identify a key in a leak, and this output is meant to be pasted
+    into a chat window.
+    """
+    secret = ("x-goog-api-key", "authorization", "x-goog-user-project",
+              "cookie", "set-cookie")
+    out = {}
+    for k, v in dict(headers).items():
+        if k.lower() in secret:
+            out[k] = "<redacted, %d chars>" % len(v)
+        else:
+            out[k] = v
+    return out
+
+
+def _debug_hooks() -> dict:
+    """TEMPORARY. httpx event hooks that report what the SDK actually built."""
+    def on_request(request):
+        _debug("REQUEST  %s %s" % (request.method, request.url))
+        _debug("  scheme=%s host=%s path=%s" % (request.url.scheme,
+                                                request.url.host,
+                                                request.url.path))
+        parts = [p for p in request.url.path.split("/") if p]
+        _debug("  api_version=%s" % (parts[0] if parts else "<none>"))
+        _debug("  headers=%r" % (_redact(request.headers),))
+        _debug("  body_bytes=%d" % len(request.content or b""))
+
+    def on_response(response):
+        response.read()
+        body = response.text
+        _debug("RESPONSE %s %s" % (response.status_code, response.reason_phrase))
+        _debug("  from=%s" % response.url)
+        _debug("  resp_headers=%r" % (_redact(response.headers),))
+        _debug("  body=%s" % (body[:1500].replace("\n", " ")))
+
+    return {"request": [on_request], "response": [on_response]}
+
+
+def _debug_exception(exc: BaseException) -> None:
+    """TEMPORARY. The full exception identity, not just the mapped message."""
+    if not os.environ.get(ENV_DEBUG, "").strip():
+        return
+    _debug("EXCEPTION %s.%s" % (type(exc).__module__, type(exc).__name__))
+    _debug("  mro=%s" % [b.__module__ + "." + b.__name__
+                         for b in type(exc).__mro__[:6]])
+    _debug("  str=%s" % str(exc)[:1500])
+    for attr in ("code", "status", "message"):
+        if hasattr(exc, attr):
+            _debug("  .%s=%r" % (attr, getattr(exc, attr)))
+    cause = exc.__cause__ or exc.__context__
+    if cause is not None:
+        _debug("  caused-by %s.%s: %s" % (type(cause).__module__,
+                                          type(cause).__name__,
+                                          str(cause)[:400]))
+
+
 def _gemini_call(api_key: str, model: str) -> Callable[[bytes, str], str]:
     """The Gemini branch. Same contract as the Anthropic one.
 
@@ -162,13 +232,16 @@ def _gemini_call(api_key: str, model: str) -> Callable[[bytes, str], str]:
         raise VisionUnavailable(
             "the google-genai SDK is not installed") from exc
 
-    client = genai.Client(
-        api_key=api_key,
-        http_options=gtypes.HttpOptions(
-            timeout=int(TIMEOUT_SECONDS * 1000),
-            retry_options=gtypes.HttpRetryOptions(attempts=1),
-        ),
+    http_options = gtypes.HttpOptions(
+        timeout=int(TIMEOUT_SECONDS * 1000),
+        retry_options=gtypes.HttpRetryOptions(attempts=1),
     )
+    if os.environ.get(ENV_DEBUG, "").strip():
+        # TEMPORARY. client_args reaches the SDK's own httpx client, so the
+        # timeout and retry settings above still apply exactly as they do
+        # without the switch. Nothing about the request changes.
+        http_options.client_args = {"event_hooks": _debug_hooks()}
+    client = genai.Client(api_key=api_key, http_options=http_options)
     config = gtypes.GenerateContentConfig(
         max_output_tokens=MAX_TOKENS,
         # No tools are passed, so there is nothing for a function-calling loop
@@ -188,10 +261,12 @@ def _gemini_call(api_key: str, model: str) -> Callable[[bytes, str], str]:
                 config=config,
             )
         except httpx.TimeoutException as exc:
+            _debug_exception(exc)
             raise VisionTransportError(
                 f"the extraction service did not respond within "
                 f"{int(TIMEOUT_SECONDS)} seconds") from exc
         except gerr.APIError as exc:
+            _debug_exception(exc)
             code = getattr(exc, "code", None)
             if code in (401, 403):
                 raise VisionTransportError(
@@ -209,9 +284,11 @@ def _gemini_call(api_key: str, model: str) -> Callable[[bytes, str], str]:
                 f"the extraction service returned status "
                 f"{code if code is not None else 'unknown'}") from exc
         except httpx.TransportError as exc:
+            _debug_exception(exc)
             raise VisionTransportError(
                 "the extraction service could not be reached") from exc
         except OSError as exc:
+            _debug_exception(exc)
             raise VisionTransportError(
                 "the extraction service could not be reached") from exc
 
