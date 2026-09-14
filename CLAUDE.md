@@ -105,7 +105,7 @@ an integration easier.
 | `lm_metrology_v7.py` | Character height, uncertainty, refusals | harness |
 | `lm_capture.py` | Camera, scale artifact, capture manifest | 114 |
 | `lm_legal_model.py` | Thresholds, provenance, disputed brackets | 81 |
-| `lm_declarations.py` | Rule 6(1) checks, three states, tiers | 39 |
+| `lm_declarations.py` | Rule 6(1) checks, three states, tiers | 83 |
 | `lm_extract.py` | Image/officer → declarations, coverage, cross-check | 34 |
 | `lm_report.py` | Inspection record, PDF + DOCX, content hash | 26 |
 | `test_integration.py` | Cross-module regression | 27 |
@@ -114,7 +114,7 @@ an integration easier.
 | `app/service.py` | The only module permitted to import `lm_*` | — |
 | `app/vision.py` | Vision provider adapter. The only module importing an SDK | — |
 | `app/main.py` | FastAPI routes. Calls `service`, never `lm_*` | — |
-| `test_webapp.py` | The web application, end to end | 227 |
+| `test_webapp.py` | The web application, end to end | 302 |
 
 The OCR cross-check needs the **`tesseract` binary** on PATH, not just
 `pytesseract`. Without it the cross-check silently skips and every field stays
@@ -130,7 +130,7 @@ python3 test_integration.py | tail -3
 python3 test_webapp.py | tail -3
 ```
 
-Expected: **81 / 114 / 39 / 34 / 26**, **27** integration checks and **227**
+Expected: **81 / 114 / 83 / 34 / 26**, **27** integration checks and **302**
 webapp checks, all `0 failed`.
 
 ---
@@ -142,7 +142,7 @@ The build was split into chunks. This is what they were and what happened.
 | # | Chunk | State |
 |---|---|---|
 | 0 | Admin: portal deadline, rubric, registration, owners | **UNOWNED — can disqualify** |
-| 1 | `lm_declarations.py` — Rule 6(1) checks | done, 39 checks |
+| 1 | `lm_declarations.py` — Rule 6(1) checks | done, 83 checks |
 | 2 | `lm_extract.py` — image/officer → declarations | done, 34 checks |
 | 3 | `lm_report.py` — record, PDF + DOCX, hash | done, 26 checks |
 | 4 | Web app (FastAPI) — login, upload, three tiers, PDF/DOCX, history, dashboard | **built** |
@@ -154,7 +154,7 @@ The build was split into chunks. This is what they were and what happened.
 | 7 | Rehearsal, 14 Sep. No new code that day | — |
 
 **Chunks 4, 5, 6 and 8 are built and self-tested. Do not rebuild them.** The
-web application lives in `app/`; run `python3 test_webapp.py` (227 checks)
+web application lives in `app/`; run `python3 test_webapp.py` (302 checks)
 before assuming otherwise.
 
 Also done, outside the chunk plan: a full code audit (`AUDIT-2026-09-12.md`),

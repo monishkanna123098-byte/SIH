@@ -771,7 +771,7 @@ def main() -> int:
         service.vision.configured = _real_configured
 
     def post_reviewed(client, *, machine, reviewed, values=None, examined=False,
-                      model="vision:test-model", product="ch8"):
+                      model="vision:test-model", product="ch8", ocr=None):
         """Post the upload form exactly as the browser would after a review."""
         data = {"product_name": product, "vision_model": model, "panels": ["front"]}
         vals = values if values is not None else {
@@ -779,6 +779,8 @@ def main() -> int:
         for k in service.FIELD_KEYS:
             data[k] = vals.get(k, "") or ""
             data[f"{k}__machine"] = machine.get(k) or ""
+            if ocr and k in ocr:
+                data[f"{k}__ocr"] = ocr[k]
             if k in reviewed:
                 data[f"{k}__reviewed"] = "1"
         if examined:
@@ -1118,8 +1120,48 @@ def main() -> int:
     iid34 = r.headers["location"].rsplit("/", 1)[-1]
     exts = {f.key: f.extractor for f in service.build_record(iid34).findings}
     ck("34.21 a fully reviewed gemini inspection is allowed", r.status_code == 303)
-    ck("34.22 reviewed fields report manual:<username>, not the model",
-       all(v == "manual:officer" for v in exts.values()), str(exts))
+    # This check previously asserted the opposite -- that reviewing all six made
+    # all six manual:officer. That was the defect, written into a test during
+    # chunk 8: the browser raises one __reviewed flag for both Confirm and a
+    # keystroke, and the server treated every raised flag as an edit. Confirming
+    # a machine value is agreeing with the model, not replacing it.
+    # MACHINE has five read values and one null (consumer_care), and this post
+    # ticks examined with an operator id. So the five READ values stay the
+    # model's -- confirming is agreeing, not retyping -- while the null becomes
+    # the officer's, because a confirmed blank under full coverage is not a
+    # machine reading at all: it is the officer claiming the declaration is not
+    # on the package, and that claim has to be attributable to them.
+    read_keys = [k for k in service.FIELD_KEYS if MACHINE.get(k)]
+    ck("34.22 confirming an unedited machine value keeps vision:<model>",
+       all(exts[k] == "vision:gemini-2.0-flash" for k in read_keys), str(exts))
+    ck("34.22b a confirmed blank under full coverage is the officer's claim",
+       exts["consumer_care"] == "manual:officer", str(exts))
+    fs34 = {f.key: f for f in service.build_record(iid34).findings}
+    ck("34.22c and that blank is the only manual row",
+       sum(1 for v in exts.values() if v.startswith("manual:")) == 1, str(exts))
+    ck("34.22d the absence claim still lands as FAIL, not CANNOT_DETERMINE",
+       fs34["consumer_care"].verdict == "FAIL", fs34["consumer_care"].verdict)
+
+    # The third face of the same defect. apply_officer_corrections sets
+    # verbatim_confirmed=True on every correction, so routing a mere
+    # confirmation through it overwrote a cross-check that had FAILED. That
+    # silently disabled the hallucination guard in check_declaration: a value
+    # no OCR engine on the image saw became PASS after one click.
+    r = post_reviewed(client, machine=MACHINE, reviewed=set(service.FIELD_KEYS),
+                      examined=False, model="gemini-2.0-flash",
+                      ocr={"net_quantity": "0"}, product="34 ocr guard")
+    iid36 = r.headers["location"].rsplit("/", 1)[-1]
+    f36 = {f.key: f for f in service.build_record(iid36).findings}
+    ck("34.22e confirming does not relabel the value as officer-typed",
+       f36["net_quantity"].extractor == "vision:gemini-2.0-flash",
+       f36["net_quantity"].extractor)
+    ck("34.22f so the uncorroborated value stays CANNOT_DETERMINE, not PASS",
+       f36["net_quantity"].verdict == "CANNOT_DETERMINE",
+       f36["net_quantity"].verdict)
+    ck("34.22g an edit, by contrast, is still the officer's own reading",
+       service.build_record(iid3).findings and
+       {f.key: f.extractor for f in service.build_record(iid3).findings}
+       ["net_quantity"] == "manual:officer")
     r = post_reviewed(client, machine=MACHINE, reviewed={"net_quantity"},
                       examined=False, model="gemini-2.0-flash",
                       product="34 gemini provenance")

@@ -179,10 +179,24 @@ def _fields_from_machine(machine_values: dict, reviewed_keys, values: dict,
                          machine_confirmed: Optional[dict] = None) -> dict:
     """Machine output, with the officer's reviewed edits laid over it.
 
-    Only the keys the officer actually touched are passed to
-    `apply_officer_corrections`. Passing all six would record the officer as
-    the source of values they never read, which is exactly the claim the
-    report's `extractor` column exists to keep honest.
+    REVIEWING IS NOT EDITING. The browser sets one `__reviewed` flag for both
+    the Confirm button and a keystroke, so the server -- which also receives
+    the original machine value in `__machine` -- is the only place the two can
+    be told apart. Passing every reviewed key to `apply_officer_corrections`
+    stamped `manual:<officer>` on all six of them, which:
+
+      * erased `vision:<model>` from values the officer only agreed with, so
+        the report could not show which rows a model produced; and
+      * overwrote `verbatim_confirmed` with True, which silently defeated the
+        OCR cross-check guard in `check_declaration` -- a model-invented value
+        that OCR could not corroborate became PASS after one click instead of
+        CANNOT_DETERMINE.
+
+    So only genuinely CHANGED values are corrections. A blank that the officer
+    confirmed is the exception, and only when coverage lets them assert
+    absence: that blank is not a machine reading being agreed with, it is the
+    officer claiming the declaration is not on the package, and the officer
+    owns that claim.
     """
     reviewed = set(reviewed_keys or ())
     unreviewed = [k for k in FIELD_KEYS if k not in reviewed]
@@ -204,7 +218,19 @@ def _fields_from_machine(machine_values: dict, reviewed_keys, values: dict,
             verbatim_confirmed=_confirm_flag(machine_confirmed, k))
         for k in FIELD_KEYS
     }
-    corrections = {k: values.get(k, "") for k in FIELD_KEYS if k in reviewed}
+    can_assert = coverage.can_assert_absence()
+    corrections = {}
+    for k in FIELD_KEYS:
+        if k not in reviewed:
+            continue
+        submitted = (values.get(k, "") or "").strip()
+        original = (machine_values.get(k, "") or "").strip()
+        if submitted != original:
+            corrections[k] = values.get(k, "")          # edited: the officer's
+        elif not submitted and can_assert:
+            corrections[k] = ""                         # confirmed absent
+    # Everything else stays exactly as the model reported it, extractor and
+    # cross-check flag intact.
     return ex.apply_officer_corrections(machine, corrections, coverage,
                                         operator=operator)
 

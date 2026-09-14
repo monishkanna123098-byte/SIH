@@ -332,18 +332,95 @@ def _check_legal_unit(value: str) -> tuple[str, str]:
             f"undetermined rather than as a violation. Officer to confirm.")
 
 
+# A two-digit year on a packaged commodity is this century. 26 -> 2026. A
+# manufacture date in the 1900s is not a thing this instrument will meet, and
+# guessing a sliding window would be a second misparse waiting to happen.
+_YEAR_CENTURY = 2000
+_YEAR_MIN, _YEAR_MAX = 1900, 2099
+
+
+def _as_month(tok: str) -> Optional[int]:
+    """A 1- or 2-digit token that is a real month number, else None."""
+    if len(tok) > 2:
+        return None
+    n = int(tok)
+    return n if 1 <= n <= 12 else None
+
+
+def _as_year(tok: str) -> Optional[int]:
+    """A 4-digit year, or a 2-digit year resolved into this century."""
+    if len(tok) == 4:
+        n = int(tok)
+        return n if _YEAR_MIN <= n <= _YEAR_MAX else None
+    if len(tok) == 2:
+        return _YEAR_CENTURY + int(tok)
+    return None
+
+
+def _parse_numeric_date(v: str) -> tuple[Optional[int], Optional[int], str]:
+    """(month, year, why-not) for the first separated numeric date in `v`.
+
+    Reads ALL the components, which is the whole point. The previous version
+    matched the first two and stopped, so 07.07.26 was read as "month 07, year
+    07" and 07/07/2026 as "month 07, year 07" -- a PASS on a misparse, printed
+    into a legal record.
+
+    Component order is not assumed. In a three-part date the year is the last
+    part (or the first, if that part is four digits), and the month is whichever
+    of the remaining two is a valid month number. If BOTH are valid months and
+    they differ -- 05.07.26 is May or July depending on whether the day or the
+    month leads -- the date is genuinely ambiguous and this returns no month.
+    Refusing is the point of the instrument; guessing right half the time is
+    the defect being fixed.
+    """
+    m = re.search(r"(\d{1,4})\s*[/\-.]\s*(\d{1,4})"
+                  r"(?:\s*[/\-.]\s*(\d{1,4}))?", v)
+    if not m:
+        return None, None, ""
+    parts = [g for g in m.groups() if g is not None]
+
+    if len(parts[0]) == 4:                  # ISO-ish: 2026-07, 2026-07-07
+        year, month = _as_year(parts[0]), _as_month(parts[1])
+        cands = ()
+    elif len(parts) == 2:                   # MM.YYYY, MM.YY
+        year, month = _as_year(parts[1]), _as_month(parts[0])
+        cands = ()
+    else:                                   # DD.MM.YY(YY) or MM.DD.YY(YY)
+        year = _as_year(parts[2])
+        cands = tuple(x for x in (_as_month(parts[0]), _as_month(parts[1]))
+                      if x is not None)
+        month = cands[0] if len(set(cands)) == 1 else None
+
+    if year is None:
+        return None, None, ("The year could not be read from "
+                            f"'{m.group(0)}'.")
+    if month is None:
+        if len(set(cands)) > 1:
+            return None, None, (
+                f"'{m.group(0)}' is ambiguous: the month is either "
+                f"{min(cands):02d} or {max(cands):02d} depending on whether "
+                f"the day or the month is written first. This instrument will "
+                f"not choose between them.")
+        return None, None, f"No valid month number is present in '{m.group(0)}'."
+    return month, year, ""
+
+
 def _check_month_year(value: str) -> tuple[str, str]:
     """The date must be readable as a month and a year."""
     v = value.lower()
+    month, year, why_not = _parse_numeric_date(v)
+    if month is not None and year is not None:
+        return (VERDICT_PASS, f"Parsed as month {month:02d}, year {year}.")
+
     yr = re.search(r"(19|20)\d{2}", v)
-    num = re.search(r"\b(0?[1-9]|1[0-2])\s*[/\-.]\s*((?:19|20)?\d{2})\b", v)
-    if num:
-        return (VERDICT_PASS,
-                f"Parsed as month {num.group(1)}, year {num.group(2)}.")
-    for name, _n in _MONTHS.items():
+    for name, num in _MONTHS.items():
         if name in v and yr:
             return (VERDICT_PASS,
-                    f"Parsed as month '{name}', year {yr.group(0)}.")
+                    f"Parsed as month {num:02d} ('{name}'), year {yr.group(0)}.")
+
+    if why_not:
+        return (VERDICT_CANNOT_DETERMINE,
+                why_not + " Officer to read the date on the physical package.")
     return (VERDICT_CANNOT_DETERMINE,
             "Declared text could not be parsed as a month and year. It may be "
             "a valid date in a format this parser does not handle.")
@@ -544,6 +621,44 @@ def _self_test() -> int:
         f = check_declaration(DECLARATION_BY_KEY[DECL_DATE],
                               ExtractedField(value=val))
         ck(f"date {val!r} -> {want}", f.verdict == want, f.verdict)
+
+    # The three-component misparse. 07.07.26 was read as "month 07, year 07"
+    # and 07/07/2026 as "month 07, year 07": the old regex matched the first
+    # two components and stopped. Both returned PASS, so a wrong year went into
+    # a signed inspection record. The verdict AND the stated reason are checked
+    # here -- a PASS carrying a fabricated year is the defect, not the PASS.
+    for val, month, year in (("07.07.26", "07", "2026"),
+                             ("07.2026", "07", "2026"),
+                             ("07/07/2026", "07", "2026"),
+                             ("07-07-26", "07", "2026"),
+                             ("07.26", "07", "2026"),
+                             ("2026-07-07", "07", "2026"),
+                             ("13.07.2026", "07", "2026"),
+                             ("MFD 07.07.26", "07", "2026")):
+        f = check_declaration(DECLARATION_BY_KEY[DECL_DATE],
+                              ExtractedField(value=val))
+        ck(f"date {val!r} -> PASS", f.verdict == VERDICT_PASS, f.verdict)
+        ck(f"date {val!r} reports month {month}", f"month {month}" in f.why, f.why)
+        ck(f"date {val!r} reports year {year}", f"year {year}" in f.why, f.why)
+        ck(f"date {val!r} never reports a two-digit year",
+           "year 07" not in f.why and "year 26" not in f.why, f.why)
+
+    # Genuinely ambiguous, and refused rather than guessed: 05.07.26 is May or
+    # July depending on whether the day or the month leads.
+    for val in ("05.07.26", "12.01.26", "05/07/2026"):
+        f = check_declaration(DECLARATION_BY_KEY[DECL_DATE],
+                              ExtractedField(value=val))
+        ck(f"ambiguous date {val!r} -> CANNOT_DETERMINE",
+           f.verdict == VERDICT_CANNOT_DETERMINE, f.verdict)
+        ck(f"ambiguous date {val!r} names both candidate months",
+           "ambiguous" in f.why and "05" in f.why or "01" in f.why, f.why)
+
+    for val in ("13.13.26", "00.2026", "99.99.99"):
+        f = check_declaration(DECLARATION_BY_KEY[DECL_DATE],
+                              ExtractedField(value=val))
+        ck(f"unparseable date {val!r} -> CANNOT_DETERMINE",
+           f.verdict == VERDICT_CANNOT_DETERMINE, f.verdict)
+        ck(f"unparseable date {val!r} is never FAIL", f.verdict != VERDICT_FAIL)
 
     # --- MRP ---------------------------------------------------------------
     f = check_declaration(DECLARATION_BY_KEY[DECL_RETAIL_PRICE],
