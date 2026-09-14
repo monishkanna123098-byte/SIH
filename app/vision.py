@@ -60,6 +60,16 @@ _NATIVE_MEDIA = {
     b"GIF89a": "image/gif",
 }
 
+# A Gemini candidate stopped for one of these carries no text part. The retired
+# SDK raised an exception for them; this one does not, so they are recognised
+# here and mapped onto the same message. Compared against the enum member's
+# `.value`, which is exactly this name -- `str()` on it yields
+# "FinishReason.SAFETY" instead, which would never match.
+_DECLINED_FINISH_REASONS = {
+    "SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "RECITATION",
+    "LANGUAGE", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "IMAGE_RECITATION",
+}
+
 
 class VisionUnavailable(Exception):
     """No provider is configured, or its SDK is not installed.
@@ -121,64 +131,86 @@ def _gemini_call(api_key: str, model: str) -> Callable[[bytes, str], str]:
     the same whichever provider is configured.
 
     The SDK is imported HERE, not at module scope, so the app starts and every
-    test passes with `google-generativeai` absent.
+    test passes with `google-genai` absent.
 
-    Two things worth knowing, neither of them a defect:
-      * `genai.configure()` is process-global. This app configures one provider
-        once from the environment, so that is acceptable -- but a second
-        provider in the same process would clobber it.
+    This is the current `google-genai` package, not the retired
+    `google-generativeai` one. The old package returned 404 for models the key
+    demonstrably had -- `gemini-2.5-flash` and `gemini-flash-latest`, both
+    listed by the REST models endpoint on the same key. This one puts the
+    configured name straight into the request path
+    (`/v1beta/models/<name>:generateContent`), so whatever the key can reach,
+    the app can reach. Set LM_VISION_MODEL to pick one; DEFAULT_MODELS is
+    unchanged.
+
+    Three things worth knowing, none of them a defect:
+      * `HttpOptions.timeout` is in MILLISECONDS, unlike every other timeout in
+        this codebase. Hence the conversion; do not delete it.
+      * `HttpRetryOptions(attempts=1)` is how this SDK is told not to retry --
+        attempts counts the original request. Left unset it retries three
+        times, which is 90 seconds with an officer standing at the bench.
       * Gemini does not accept image/gif, which `_media_type` returns for a
         GIF. Unreachable from this app: `ALLOWED_IMAGE` in main.py has no
         `.gif`. If GIF uploads are ever allowed, convert it to PNG here the way
         `_media_type` already converts BMP and TIFF.
     """
     try:
-        import google.generativeai as genai
-        from google.generativeai import types as gtypes
-        from google.api_core import exceptions as gexc
+        from google import genai
+        from google.genai import errors as gerr
+        from google.genai import types as gtypes
+        import httpx                             # the SDK's sync transport
     except ImportError as exc:                   # pragma: no cover - env dependent
         raise VisionUnavailable(
-            "the google-generativeai SDK is not installed") from exc
+            "the google-genai SDK is not installed") from exc
 
-    genai.configure(api_key=api_key)
-    client = genai.GenerativeModel(model_name=model)
+    client = genai.Client(
+        api_key=api_key,
+        http_options=gtypes.HttpOptions(
+            timeout=int(TIMEOUT_SECONDS * 1000),
+            retry_options=gtypes.HttpRetryOptions(attempts=1),
+        ),
+    )
+    config = gtypes.GenerateContentConfig(
+        max_output_tokens=MAX_TOKENS,
+        # No tools are passed, so there is nothing for a function-calling loop
+        # to call. Disabling it keeps one request one request, and silences a
+        # library warning on stderr that would otherwise appear mid-inspection.
+        automatic_function_calling=gtypes.AutomaticFunctionCallingConfig(
+            disable=True),
+    )
 
     def call(image_bytes: bytes, prompt: str) -> str:
         payload, media = _media_type(image_bytes)
         try:
-            resp = client.generate_content(
-                [{"mime_type": media, "data": payload}, prompt],
-                # retry=None is how this SDK is told not to retry. A retry
-                # doubles the wait with an officer standing at the bench.
-                request_options=gtypes.RequestOptions(
-                    timeout=TIMEOUT_SECONDS, retry=None),
+            resp = client.models.generate_content(
+                model=model,
+                contents=[gtypes.Part.from_bytes(data=payload, mime_type=media),
+                          prompt],
+                config=config,
             )
-        except gexc.DeadlineExceeded as exc:
+        except httpx.TimeoutException as exc:
             raise VisionTransportError(
                 f"the extraction service did not respond within "
                 f"{int(TIMEOUT_SECONDS)} seconds") from exc
-        except gexc.RetryError as exc:
-            raise VisionTransportError(
-                f"the extraction service did not respond within "
-                f"{int(TIMEOUT_SECONDS)} seconds") from exc
-        except (gexc.Unauthenticated, gexc.PermissionDenied) as exc:
-            raise VisionTransportError(
-                "the extraction service rejected the configured credentials") from exc
-        except gexc.ResourceExhausted as exc:
-            raise VisionTransportError(
-                "the extraction service is rate limiting this key") from exc
-        except gexc.ServiceUnavailable as exc:
-            raise VisionTransportError(
-                "the extraction service could not be reached") from exc
-        except gexc.GoogleAPICallError as exc:
-            # Status code only. Provider error bodies can echo request content.
+        except gerr.APIError as exc:
+            code = getattr(exc, "code", None)
+            if code in (401, 403):
+                raise VisionTransportError(
+                    "the extraction service rejected the configured "
+                    "credentials") from exc
+            if code == 429:
+                raise VisionTransportError(
+                    "the extraction service is rate limiting this key") from exc
+            if code == 503:
+                raise VisionTransportError(
+                    "the extraction service could not be reached") from exc
+            # Status code only. Provider error bodies can echo request content,
+            # and this SDK puts the whole body in str(exc).
             raise VisionTransportError(
                 f"the extraction service returned status "
-                f"{getattr(exc, 'code', 'unknown')}") from exc
-        except (gtypes.BlockedPromptException,
-                gtypes.StopCandidateException) as exc:
+                f"{code if code is not None else 'unknown'}") from exc
+        except httpx.TransportError as exc:
             raise VisionTransportError(
-                "the extraction service declined to process this image") from exc
+                "the extraction service could not be reached") from exc
         except OSError as exc:
             raise VisionTransportError(
                 "the extraction service could not be reached") from exc
@@ -193,12 +225,22 @@ def _gemini_call(api_key: str, model: str) -> Callable[[bytes, str], str]:
         # an error: `parse_vision_json` owns that decision and already raises
         # ExtractionError on an empty response.
         out = []
+        stops = set()
         for cand in (getattr(resp, "candidates", None) or []):
+            reason = getattr(cand, "finish_reason", None)
+            stops.add(str(getattr(reason, "value", reason) or ""))
             content = getattr(cand, "content", None)
             for part in (getattr(content, "parts", None) or []):
                 text = getattr(part, "text", "")
                 if text:
                     out.append(text)
+
+        # The retired SDK raised for a candidate stopped on safety grounds. This
+        # one just returns a candidate with no parts, which would otherwise
+        # reach the officer as a bad-photograph message. Same words as before.
+        if not out and (stops & _DECLINED_FINISH_REASONS):
+            raise VisionTransportError(
+                "the extraction service declined to process this image")
         return "".join(out)
 
     return call

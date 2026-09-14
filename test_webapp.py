@@ -723,7 +723,7 @@ def main() -> int:
        str(_required))
     ck("25.5 chunk 8's dependencies are declared OPTIONAL",
        [l for l in _req_lines if l not in _required]
-       == ["anthropic", "google-generativeai", "pytesseract"],
+       == ["anthropic", "google-genai", "pytesseract"],
        str([l for l in _req_lines if l not in _required]))
     ck("25.6 the strip fetches nothing",
        "http://" not in _pipe_css and "https://" not in _pipe_css
@@ -1134,7 +1134,7 @@ def main() -> int:
 
     # The adapter's own invariants, for the new branch.
     ck("34.25 the gemini SDK is imported lazily, not at module scope",
-       "import google.generativeai" in _vis_src
+       "from google import genai" in _vis_code
        and "google" not in [getattr(n, "module", None) or
                             (n.names[0].name if n.names else "")
                             for n in __import__("ast").parse(_vis_src).body
@@ -1143,9 +1143,11 @@ def main() -> int:
     ck("34.26 the gemini branch parses no JSON",
        "json.loads" not in _vis_code and "parse_vision_json" not in _vis_code)
     ck("34.27 it holds no prompt text", "VISION_PROMPT" not in _vis_code)
-    ck("34.28 it disables retries", "retry=None" in _vis_src)
-    ck("34.29 it uses the same 30-second timeout",
-       "timeout=TIMEOUT_SECONDS" in _vis_src)
+    ck("34.28 it disables retries",
+       "HttpRetryOptions(attempts=1)" in _vis_code, "retries are not disabled")
+    ck("34.29 both branches use the same 30-second timeout constant",
+       "timeout=TIMEOUT_SECONDS" in _vis_code                 # anthropic, seconds
+       and "timeout=int(TIMEOUT_SECONDS * 1000)" in _vis_code)  # gemini, ms
     ck("34.30 it reuses the shared BMP/TIFF conversion",
        _vis_src.count("_media_type(image_bytes)") == 2)
     ck("34.31 no key material in the file",
