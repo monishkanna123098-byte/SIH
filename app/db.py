@@ -105,19 +105,28 @@ def verify_password(password: str, stored: str) -> bool:
 # can then sign in. Override both before sharing a URL. Defaults are unchanged
 # so the local run, the self-tests and the offline demo behave exactly as
 # before with nothing set.
-SEED_USERS = (
-    ("officer",
-     os.environ.get("LM_OFFICER_PASSWORD") or "officer-2026", "officer"),
-    ("supervisor",
-     os.environ.get("LM_SUPERVISOR_PASSWORD") or "supervisor-2026",
-     "supervisor"),
-)
+_SEED_ENV = {"officer": "LM_OFFICER_PASSWORD",
+             "supervisor": "LM_SUPERVISOR_PASSWORD"}
+_SEED_DEFAULT = {"officer": "officer-2026", "supervisor": "supervisor-2026"}
+
+
+def _seed_password(username: str) -> str:
+    return os.environ.get(_SEED_ENV[username]) or _SEED_DEFAULT[username]
+
+
+def _seed_password_is_set(username: str) -> bool:
+    """Whether an operator explicitly chose this account's password."""
+    return bool(os.environ.get(_SEED_ENV[username]))
+
+
+SEED_USERS = tuple((u, _seed_password(u), r)
+                   for u, r in (("officer", "officer"),
+                                ("supervisor", "supervisor")))
 
 
 def seeded_passwords_are_default() -> bool:
     """True while either demo account still has its committed password."""
-    return not (os.environ.get("LM_OFFICER_PASSWORD")
-                and os.environ.get("LM_SUPERVISOR_PASSWORD"))
+    return not all(_seed_password_is_set(u) for u in _SEED_ENV)
 
 
 # Columns added after chunk 4 shipped. Applied with ALTER TABLE rather than by
@@ -154,11 +163,24 @@ def init_db(path: str | None = None) -> None:
         con.executescript(SCHEMA)
         _migrate(con)
         for username, password, role in SEED_USERS:
-            if con.execute("SELECT 1 FROM users WHERE username=?",
-                           (username,)).fetchone() is None:
+            row = con.execute("SELECT password_hash FROM users WHERE username=?",
+                              (username,)).fetchone()
+            if row is None:
                 con.execute(
                     "INSERT INTO users (username, password_hash, role) VALUES (?,?,?)",
                     (username, hash_password(password), role))
+            elif (_seed_password_is_set(username)
+                  and not verify_password(password, row["password_hash"])):
+                # The account already exists from an earlier run. Without this
+                # the environment variable would be silently inert on any
+                # database that has been opened before -- every Codespace after
+                # the first -- and the committed password would keep working
+                # while `seeded_passwords_are_default()` reported all clear.
+                # Only ever applied when a password was explicitly configured:
+                # a deployment that sets nothing never has a password reset
+                # underneath it.
+                con.execute("UPDATE users SET password_hash=? WHERE username=?",
+                            (hash_password(password), username))
         con.commit()
     finally:
         con.close()

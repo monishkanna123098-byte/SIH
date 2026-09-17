@@ -28,6 +28,23 @@ is committed.
 
 Never paste a key into a form, a template, a commit or a chat window.
 
+Generate the two passwords locally so the value never travels through a chat
+window or a shell history you keep:
+
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(24))"
+```
+
+Run it twice, paste one value into each secret. `token_urlsafe` gives
+URL-safe characters only, so nothing needs shell quoting if you ever export it
+by hand.
+
+Changing a secret takes effect on the codespace's next start, and **is applied
+to the existing database** -- `init_db()` updates the stored hash when the
+variable is set, so the committed password stops working even on a codespace
+that was created before you set it. Stop and start the codespace after
+changing a secret; a running one keeps the old value.
+
 ### 2. Open the Codespace
 
 Code → Codespaces → **Create codespace on

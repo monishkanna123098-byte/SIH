@@ -1344,6 +1344,77 @@ def main() -> int:
     ck("36.34 every landing selector is namespaced under .lp",
        not _leaks, str(sorted(set(_leaks))[:4]))
 
+    # ---- 37. seeded-account passwords, for a shared deployment -----------
+    # Run against an isolated database: rotating the live one would log the
+    # rest of this suite out.
+    import importlib as _il
+    _pwdir = tempfile.mkdtemp(prefix="lm-seed-pw-")
+    _pwdb = os.path.join(_pwdir, "seed.db")
+
+    def _seed_boot(officer=None, supervisor=None):
+        """init_db() a fixed path with the environment as given."""
+        for _k, _v in (("LM_OFFICER_PASSWORD", officer),
+                       ("LM_SUPERVISOR_PASSWORD", supervisor)):
+            if _v is None:
+                os.environ.pop(_k, None)
+            else:
+                os.environ[_k] = _v
+        _il.reload(db)
+        db.DATA_DIR, db.DB_PATH = _pwdir, _pwdb
+        db.UPLOAD_DIR = os.path.join(_pwdir, "u")
+        db.REPORT_DIR = os.path.join(_pwdir, "r")
+        db.init_db(_pwdb)
+
+    def _seed_ok(username, password):
+        con = db.connect(_pwdb)
+        try:
+            row = con.execute("SELECT password_hash FROM users WHERE username=?",
+                              (username,)).fetchone()
+            return bool(row) and db.verify_password(password, row["password_hash"])
+        finally:
+            con.close()
+
+    _seed_boot()
+    ck("37.1 with nothing configured the committed default is seeded",
+       _seed_ok("officer", "officer-2026"))
+    ck("37.2 and the app reports its passwords as default",
+       db.seeded_passwords_are_default())
+
+    # The failure this exists for: the account already exists, so an
+    # INSERT-if-absent seed left the committed password working while the
+    # environment variable appeared to have taken effect.
+    _seed_boot("rotated-officer-pw", "rotated-supervisor-pw")
+    ck("37.3 a configured password is applied to an EXISTING database",
+       _seed_ok("officer", "rotated-officer-pw"))
+    ck("37.4 and the committed default stops working",
+       not _seed_ok("officer", "officer-2026"))
+    ck("37.5 the supervisor account rotates too",
+       _seed_ok("supervisor", "rotated-supervisor-pw")
+       and not _seed_ok("supervisor", "supervisor-2026"))
+    ck("37.6 configured passwords are no longer reported as default",
+       not db.seeded_passwords_are_default())
+
+    _seed_boot()
+    ck("37.7 unsetting the variables does not reset a rotated password",
+       _seed_ok("officer", "rotated-officer-pw")
+       and not _seed_ok("officer", "officer-2026"))
+
+    _seed_boot("second-rotation-pw", "rotated-supervisor-pw")
+    ck("37.8 rotating twice keeps only the newest",
+       _seed_ok("officer", "second-rotation-pw")
+       and not _seed_ok("officer", "rotated-officer-pw"))
+
+    _seed_boot("only-one-set", None)
+    ck("37.9 one variable set is still reported as default",
+       db.seeded_passwords_are_default())
+
+    for _k in ("LM_OFFICER_PASSWORD", "LM_SUPERVISOR_PASSWORD"):
+        os.environ.pop(_k, None)
+    _il.reload(db)
+    db.DATA_DIR, db.DB_PATH = _TMP, os.path.join(_TMP, "inspections.db")
+    db.UPLOAD_DIR = os.path.join(_TMP, "uploads")
+    db.REPORT_DIR = os.path.join(_TMP, "reports")
+
     print("=" * 74)
     for f in fails:
         print("FAIL:", f)
