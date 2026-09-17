@@ -114,7 +114,7 @@ an integration easier.
 | `app/service.py` | The only module permitted to import `lm_*` | — |
 | `app/vision.py` | Vision provider adapter. The only module importing an SDK | — |
 | `app/main.py` | FastAPI routes. Calls `service`, never `lm_*` | — |
-| `test_webapp.py` | The web application, end to end | 302 |
+| `test_webapp.py` | The web application, end to end | 334 |
 
 The OCR cross-check needs the **`tesseract` binary** on PATH, not just
 `pytesseract`. Without it the cross-check silently skips and every field stays
@@ -130,7 +130,7 @@ python3 test_integration.py | tail -3
 python3 test_webapp.py | tail -3
 ```
 
-Expected: **81 / 114 / 83 / 34 / 26**, **27** integration checks and **302**
+Expected: **81 / 114 / 83 / 34 / 26**, **27** integration checks and **334**
 webapp checks, all `0 failed`.
 
 ---
@@ -154,7 +154,7 @@ The build was split into chunks. This is what they were and what happened.
 | 7 | Rehearsal, 14 Sep. No new code that day | — |
 
 **Chunks 4, 5, 6 and 8 are built and self-tested. Do not rebuild them.** The
-web application lives in `app/`; run `python3 test_webapp.py` (302 checks)
+web application lives in `app/`; run `python3 test_webapp.py` (334 checks)
 before assuming otherwise.
 
 Also done, outside the chunk plan: a full code audit (`AUDIT-2026-09-12.md`),

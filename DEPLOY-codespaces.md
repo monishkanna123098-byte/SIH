@@ -140,7 +140,7 @@ python3 test_integration.py | tail -3
 python3 test_webapp.py | tail -3
 ```
 
-Expected: **81 / 114 / 83 / 34 / 26**, **27** integration, **302** webapp, all
+Expected: **81 / 114 / 83 / 34 / 26**, **27** integration, **334** webapp, all
 `0 failed`. The OCR cross-check needs the tesseract binary; `setup.sh` installs
 it, and `tesseract --version` confirms it.
 

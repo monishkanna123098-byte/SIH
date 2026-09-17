@@ -45,7 +45,14 @@ PROVIDERS = (PROVIDER_ANTHROPIC, PROVIDER_GEMINI)
 
 DEFAULT_MODELS = {
     PROVIDER_ANTHROPIC: "claude-opus-5",
-    PROVIDER_GEMINI: "gemini-2.0-flash",
+    # NOT gemini-2.0-flash. Google still lists that model but no longer serves
+    # generateContent for it to new accounts, so it 404s -- a failure mode that
+    # cost two separate multi-day debugging sessions because the app swallowed
+    # the provider's explanation. gemini-flash-lite-latest is confirmed working
+    # against a real inline-image request. If this one is ever retired the same
+    # way, `python3 diag_gemini.py --list` names the models a key can actually
+    # call.
+    PROVIDER_GEMINI: "gemini-flash-lite-latest",
 }
 DEFAULT_MODEL = DEFAULT_MODELS[PROVIDER_ANTHROPIC]      # kept: older callers
 DEFAULT_BASE_URL = "https://api.anthropic.com"
@@ -172,6 +179,31 @@ def _debug_hooks() -> dict:
     return {"request": [on_request], "response": [on_response]}
 
 
+_PROVIDER_MESSAGE_MAX = 300
+
+
+def _provider_message(exc: BaseException) -> Optional[str]:
+    """The provider's own `error.message`, made safe to show an officer.
+
+    ONLY the parsed `message` field, never `str(exc)` -- this SDK puts the
+    entire response body in str(), and a provider error body can echo request
+    content. The field can be absent, null, or not even a string, so every one
+    of those is checked rather than assumed.
+
+    Collapsed to one line and truncated: this lands in a UI notice, and a
+    newline or a kilobyte of text in there is its own small defect.
+    """
+    raw = getattr(exc, "message", None)
+    if not isinstance(raw, str):
+        return None
+    text = " ".join(raw.split())                  # also drops \r, \n and tabs
+    if not text:
+        return None
+    if len(text) > _PROVIDER_MESSAGE_MAX:
+        text = text[:_PROVIDER_MESSAGE_MAX - 1].rstrip() + "\u2026"
+    return text
+
+
 def _debug_exception(exc: BaseException) -> None:
     """TEMPORARY. The full exception identity, not just the mapped message."""
     if not os.environ.get(ENV_DEBUG, "").strip():
@@ -278,6 +310,21 @@ def _gemini_call(api_key: str, model: str) -> Callable[[bytes, str], str]:
             if code == 503:
                 raise VisionTransportError(
                     "the extraction service could not be reached") from exc
+            if code == 404:
+                # The one status that gets to quote the provider. A 404 here is
+                # always about the model name, and Google says exactly what is
+                # wrong and what to use instead -- "no longer available to new
+                # users. Please update your code to use models/...". Swallowing
+                # that and printing "returned status 404" sent two debugging
+                # sessions looking for an answer the provider had already
+                # given. Every other status stays a bare code on purpose.
+                said = _provider_message(exc)
+                # rstrip so the provider's own full stop does not collide with
+                # the one that closes this clause.
+                quoted = (" -- it said: " + said.rstrip(" .")) if said else ""
+                raise VisionTransportError(
+                    "the extraction service does not have model '%s'%s. "
+                    "Check LM_VISION_MODEL." % (model, quoted)) from exc
             # Status code only. Provider error bodies can echo request content,
             # and this SDK puts the whole body in str(exc).
             raise VisionTransportError(

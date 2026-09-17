@@ -1023,9 +1023,15 @@ def main() -> int:
        _vision.PROVIDER_GEMINI == "gemini"
        and set(_vision.PROVIDERS) == {"anthropic", "gemini"},
        str(_vision.PROVIDERS))
-    ck("34.2 its default model is gemini-2.0-flash",
-       _vision.DEFAULT_MODELS[_vision.PROVIDER_GEMINI] == "gemini-2.0-flash",
+    # Was gemini-2.0-flash. Google still LISTS that model but no longer serves
+    # generateContent for it to new accounts, so the default 404'd out of the
+    # box. Pinned by name so a silent revert is a red test, not another
+    # multi-day debugging session.
+    ck("34.2 the gemini default is a model that is actually served",
+       _vision.DEFAULT_MODELS[_vision.PROVIDER_GEMINI] == "gemini-flash-lite-latest",
        str(_vision.DEFAULT_MODELS))
+    ck("34.2b and is not the retired gemini-2.0-flash",
+       _vision.DEFAULT_MODELS[_vision.PROVIDER_GEMINI] != "gemini-2.0-flash")
     ck("34.3 the anthropic default is unchanged",
        _vision.DEFAULT_MODELS[_vision.PROVIDER_ANTHROPIC] == "claude-opus-5")
 
@@ -1044,7 +1050,8 @@ def main() -> int:
     _set_env(provider="gemini", key="not-a-real-key")
     cfg = _vision.configured()
     ck("34.4 configured() accepts gemini",
-       cfg == {"provider": "gemini", "model": "gemini-2.0-flash"}, str(cfg))
+       cfg == {"provider": "gemini",
+               "model": _vision.DEFAULT_MODELS["gemini"]}, str(cfg))
     _set_env(provider="gemini", key="not-a-real-key", model="gemini-1.5-pro")
     ck("34.5 LM_VISION_MODEL overrides the default",
        _vision.configured()["model"] == "gemini-1.5-pro",
@@ -1192,6 +1199,92 @@ def main() -> int:
        and "timeout=int(TIMEOUT_SECONDS * 1000)" in _vis_code)  # gemini, ms
     ck("34.30 it reuses the shared BMP/TIFF conversion",
        _vis_src.count("_media_type(image_bytes)") == 2)
+    # A 404 is always about the model name, and the provider says exactly what
+    # is wrong. The app used to print "returned status 404" and throw that
+    # away. Driven through the real SDK against a local endpoint, so this
+    # exercises the actual error path rather than a stubbed one.
+    import json as _j, threading as _th
+    from http.server import BaseHTTPRequestHandler as _BH, ThreadingHTTPServer as _TS
+
+    _reply = {"v": (404, {})}
+
+    class _Handler(_BH):
+        def do_POST(self):                                  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            _code, _body = _reply["v"]
+            _out = _j.dumps(_body).encode()
+            self.send_response(_code)
+            self.send_header("Content-Length", str(len(_out)))
+            self.end_headers()
+            self.wfile.write(_out)
+
+        def log_message(self, *a):                          # noqa: A002
+            pass
+
+    _srv = _TS(("127.0.0.1", 0), _Handler)
+    _th.Thread(target=_srv.serve_forever, daemon=True).start()
+    _prev_base = os.environ.get("GOOGLE_GEMINI_BASE_URL")
+    os.environ["GOOGLE_GEMINI_BASE_URL"] = "http://127.0.0.1:%d" % _srv.server_port
+
+    _PNG404 = bytes.fromhex("89504e470d0a1a0a") + b"\x00" * 8
+    _MODEL404 = "a-model-this-key-cannot-serve"
+    _ECHO = "ECHOED-REQUEST-CONTENT-MUST-NOT-REACH-THE-OFFICER"
+
+    def _say(code, body):
+        _reply["v"] = (code, body)
+        try:
+            _vision.make_call("gemini", "AIzaTEST0000000000",
+                              _MODEL404)(_PNG404, "PROMPT")
+            return ""
+        except _vision.VisionTransportError as _e:
+            return str(_e)
+
+    _m = _say(404, {"error": {"code": 404, "status": "NOT_FOUND", "message":
+              "This model models/%s is no longer available to new users. "
+              "Please update your code to use models/gemini-3.6-flash."
+              % _MODEL404}})
+    ck("34.30a a 404 names the model that was requested",
+       _MODEL404 in _m, _m)
+    ck("34.30b a 404 quotes the provider's own explanation",
+       "no longer available to new users" in _m
+       and "gemini-3.6-flash" in _m, _m)
+    ck("34.30c a 404 says which variable to change",
+       "LM_VISION_MODEL" in _m, _m)
+    ck("34.30d it never says only 'returned status 404'",
+       "returned status 404" not in _m, _m)
+    ck("34.30e the quoted text is one line",
+       "\n" not in _m and "\r" not in _m, repr(_m))
+
+    for _lbl, _body in (("no message", {"error": {"code": 404}}),
+                        ("null message", {"error": {"message": None}}),
+                        ("non-string message", {"error": {"message": {"a": 1}}}),
+                        ("empty body", {})):
+        _m2 = _say(404, _body)
+        ck("34.30f a 404 with %s still names the model" % _lbl,
+           _MODEL404 in _m2 and "LM_VISION_MODEL" in _m2, _m2)
+
+    _m3 = _say(404, {"error": {"message": "Y" * 900}})
+    ck("34.30g a very long provider message is truncated",
+       len(_m3) < 500, str(len(_m3)))
+
+    # The other half of the same rule: 404 is the ONLY status allowed to quote
+    # the provider. str(exc) on this SDK carries the whole response body, and a
+    # provider error body can echo request content.
+    for _code in (400, 401, 403, 429, 500, 503):
+        _m4 = _say(_code, {"error": {"code": _code, "status": "S",
+                                     "message": _ECHO}})
+        ck("34.30h a %d leaks no provider body" % _code,
+           _ECHO not in _m4 and _m4 != "", _m4)
+    ck("34.30i and a 400 is still a bare status code",
+       _say(400, {"error": {"message": _ECHO}}) ==
+       "the extraction service returned status 400")
+
+    _srv.shutdown(); _srv.server_close()
+    if _prev_base is None:
+        os.environ.pop("GOOGLE_GEMINI_BASE_URL", None)
+    else:
+        os.environ["GOOGLE_GEMINI_BASE_URL"] = _prev_base
+
     ck("34.31 no key material in the file",
        not re.search(r"(sk-|AIza)[A-Za-z0-9_\-]{10,}", _vis_src))
     ck("34.32 lm_extract.py was not touched",
