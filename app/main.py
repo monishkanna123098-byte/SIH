@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import math
 import os
+import sys
 import uuid
 from urllib.parse import quote
 from typing import Optional
@@ -40,6 +41,18 @@ ALLOWED_IMAGE = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 @app.on_event("startup")
 def _startup() -> None:
     db.init_db()
+    # One line on stderr, never in the UI. Bound to a non-loopback interface
+    # the app is reachable by something other than this machine -- a Codespace
+    # forwarded port, a LAN, a container -- and the committed demo passwords
+    # stop being a laptop-only convenience.
+    # `or` not a default argument: an empty LM_HOST means unset, which is how
+    # run.sh reads it too (${LM_HOST:-127.0.0.1}).
+    host = os.environ.get("LM_HOST") or "127.0.0.1"
+    if db.seeded_passwords_are_default() and host != "127.0.0.1":
+        print("WARNING: serving on %s with the committed demo passwords. "
+              "Set LM_OFFICER_PASSWORD and LM_SUPERVISOR_PASSWORD before "
+              "making this reachable by anyone else." % host,
+              file=sys.stderr, flush=True)
 
 
 def _render(request: Request, template: str, user: Optional[dict],

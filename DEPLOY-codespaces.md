@@ -1,0 +1,117 @@
+# Deploying through GitHub Codespaces
+
+What this is: a way to **share** the instrument — a link a teammate, mentor or
+judge can open — and a backup if the demo laptop fails.
+
+What it is not: a hosted service. The design position in `CLAUDE.md` stands.
+The app is local-first, runs with networking disabled, and stores its records
+on local disk. A Codespace is a machine that happens to be somewhere else; it
+does not change any of that, which is exactly why it was chosen over a PaaS.
+
+---
+
+## One-time setup
+
+### 1. Add the secrets
+
+GitHub → Settings → Codespaces → **Repository secrets**, scoped to this repo.
+They arrive as environment variables; nothing is read from a file and nothing
+is committed.
+
+| Secret | Needed | Why |
+|---|---|---|
+| `LM_OFFICER_PASSWORD` | before any public link | `app/db.py` seeds `officer-2026`, which is in the repo |
+| `LM_SUPERVISOR_PASSWORD` | before any public link | same, for `supervisor-2026` |
+| `LM_VISION_API_KEY` | only for automated extraction | absent → the button does not render, manual path unchanged |
+| `LM_VISION_PROVIDER` | with the key | `anthropic` or `gemini` |
+| `LM_VISION_MODEL` | optional | e.g. `gemini-2.5-flash` |
+
+Never paste a key into a form, a template, a commit or a chat window.
+
+### 2. Open the Codespace
+
+Code → Codespaces → **Create codespace on
+`claude/adoring-meitner-gczaml`**.
+
+`.devcontainer/setup.sh` runs once on create: installs the `tesseract` binary
+via apt, pip-installs `requirements.txt`, then imports every dependency and
+prints the tesseract version so a broken image fails loudly instead of at the
+first inspection.
+
+Provisioning takes a few minutes, most of it scipy and opencv.
+
+---
+
+## Running it
+
+```bash
+./run.sh
+```
+
+The devcontainer sets `LM_HOST=0.0.0.0` and `LM_RELOAD=0`. Outside a
+Codespace, `run.sh` is unchanged: `127.0.0.1:8000` with `--reload`.
+
+VS Code raises a notification for port 8000; the **Ports** panel has the URL.
+
+### Port visibility
+
+Forwarded ports are **private by default** — only your GitHub account can open
+them. That is the right setting for working on it alone.
+
+To share, set the port's visibility to **Public** in the Ports panel. Anything
+with the URL can then reach the login page, so set the two password secrets
+first. If you serve on a non-loopback interface while either is still the
+committed default, the app prints a warning to stderr at startup.
+
+---
+
+## Cost
+
+GitHub Pro includes 180 Codespaces core-hours and 20 GB storage per month. A
+2-core machine spends 2 core-hours per wall-clock hour, so roughly 90 hours.
+
+**Stop the codespace when you are not demoing** — Code → Codespaces → ⋯ → Stop.
+It idles out on its own after 30 minutes by default, but stopping is
+immediate. Storage is billed while it exists, so delete codespaces you have
+finished with.
+
+---
+
+## Where the data goes
+
+`data/` — SQLite, uploaded images, generated PDFs and DOCXs, `session.key` —
+lives on the codespace volume. It is gitignored and never committed.
+
+- Survives stop/start.
+- **Lost when the codespace is deleted.**
+
+Inspection records carry a SHA-256 content hash and the report calls itself
+tamper-evident. If a record matters, download the PDF or DOCX before deleting
+the codespace. Do not treat the codespace as the archive.
+
+---
+
+## Confirming it is intact
+
+Run all seven suites inside the Codespace before demoing:
+
+```bash
+for f in lm_legal_model lm_capture lm_declarations lm_extract lm_report; do
+  python3 $f.py | grep -i "self-test"
+done
+python3 test_integration.py | tail -3
+python3 test_webapp.py | tail -3
+```
+
+Expected: **81 / 114 / 83 / 34 / 26**, **27** integration, **302** webapp, all
+`0 failed`. The OCR cross-check needs the tesseract binary; `setup.sh` installs
+it, and `tesseract --version` confirms it.
+
+---
+
+## One thing that does not change
+
+Run one process. The read-then-write inspection-ID race recorded in
+`ACCEPTANCE-2026-09-13.md` was judged acceptable at a single process and was
+not reproducible at 40 concurrent requests. Do not start a second worker
+(`--workers`) to make it feel faster.

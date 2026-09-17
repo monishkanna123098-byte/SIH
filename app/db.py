@@ -99,8 +99,25 @@ def verify_password(password: str, stored: str) -> bool:
 # --------------------------------------------------------------------------
 # Setup
 # --------------------------------------------------------------------------
-SEED_USERS = (("officer", "officer-2026", "officer"),
-              ("supervisor", "supervisor-2026", "supervisor"))
+# The two demo accounts. Their passwords are in this file and therefore in the
+# repository, which is fine for a laptop reachable only from itself and NOT
+# fine the moment a forwarded port is made public: anyone who can read the repo
+# can then sign in. Override both before sharing a URL. Defaults are unchanged
+# so the local run, the self-tests and the offline demo behave exactly as
+# before with nothing set.
+SEED_USERS = (
+    ("officer",
+     os.environ.get("LM_OFFICER_PASSWORD") or "officer-2026", "officer"),
+    ("supervisor",
+     os.environ.get("LM_SUPERVISOR_PASSWORD") or "supervisor-2026",
+     "supervisor"),
+)
+
+
+def seeded_passwords_are_default() -> bool:
+    """True while either demo account still has its committed password."""
+    return not (os.environ.get("LM_OFFICER_PASSWORD")
+                and os.environ.get("LM_SUPERVISOR_PASSWORD"))
 
 
 # Columns added after chunk 4 shipped. Applied with ALTER TABLE rather than by

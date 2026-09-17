@@ -1,0 +1,35 @@
+{
+  "name": "SIH26034 - Legal Metrology inspection instrument",
+
+  // Python 3.11 to match the version every self-test count in CLAUDE.md was
+  // recorded on. opencv-python-headless vendors its own shared libraries, so
+  // no GUI or GL packages are needed on top of this image; tesseract is the
+  // only apt dependency and setup.sh installs it.
+  "image": "mcr.microsoft.com/devcontainers/python:3.11-bookworm",
+
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": {
+      "label": "Inspection instrument",
+      "onAutoForward": "notify"
+    }
+  },
+
+  "containerEnv": {
+    // Codespaces reaches the app through its port-forwarding agent, which
+    // needs the server on all interfaces. run.sh still defaults to 127.0.0.1
+    // everywhere else -- the local-only posture is unchanged off this image.
+    "LM_HOST": "0.0.0.0",
+    // --reload costs CPU on a 2-core machine and restarts the process under a
+    // demo. Off here, on by default locally.
+    "LM_RELOAD": "0"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python"]
+    }
+  }
+}
