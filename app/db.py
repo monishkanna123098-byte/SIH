@@ -111,12 +111,23 @@ _SEED_DEFAULT = {"officer": "officer-2026", "supervisor": "supervisor-2026"}
 
 
 def _seed_password(username: str) -> str:
-    return os.environ.get(_SEED_ENV[username]) or _SEED_DEFAULT[username]
+    """The configured password, or the committed default.
+
+    STRIPPED, and deliberately. A value pasted into a secret store from a
+    terminal almost always carries a trailing newline; unstripped, the stored
+    hash covers that newline and the password the operator believes they set
+    cannot be typed. A whitespace-only value is worse -- it counts as
+    configured, so the committed default stops working too and nothing at all
+    opens the account. Matches how the vision key is read (vision.configured()
+    strips it). The cost is that a password cannot begin or end with a space.
+    """
+    return (os.environ.get(_SEED_ENV[username]) or "").strip() \
+        or _SEED_DEFAULT[username]
 
 
 def _seed_password_is_set(username: str) -> bool:
     """Whether an operator explicitly chose this account's password."""
-    return bool(os.environ.get(_SEED_ENV[username]))
+    return bool((os.environ.get(_SEED_ENV[username]) or "").strip())
 
 
 SEED_USERS = tuple((u, _seed_password(u), r)

@@ -82,6 +82,26 @@ committed default, the app prints a warning to stderr at startup.
 
 ---
 
+## "Username or password not recognised"
+
+Run this in the Codespace terminal. It prints lengths and yes/no only -- no
+password -- so the output is safe to paste anywhere:
+
+```bash
+python3 whoami-check.py
+```
+
+It says which password each account is actually on, and what to type. The three
+causes, in the order they happen:
+
+1. **The secrets were added after the codespace was created.** They only reach
+   the container at start. Stop and start the codespace -- not just the server.
+2. **The account rotated and you are typing the old password.** Once
+   `LM_OFFICER_PASSWORD` is set, `officer-2026` stops working by design. Type
+   the value you put in the secret.
+3. **You no longer have the value.** Set the secret again to something you do
+   have, stop and start the codespace, and the account rotates to it.
+
 ## Cost
 
 GitHub Pro includes 180 Codespaces core-hours and 20 GB storage per month. A

@@ -1408,6 +1408,62 @@ def main() -> int:
     ck("37.9 one variable set is still reported as default",
        db.seeded_passwords_are_default())
 
+    # A value pasted into a secret store from a terminal usually carries a
+    # trailing newline. Unstripped, the stored hash covered that newline and
+    # the password the operator believed they set could not be typed --
+    # "username or password not recognised", with the secret visibly present.
+    _pwdir2 = tempfile.mkdtemp(prefix="lm-seed-ws-")
+    _pwdb2 = os.path.join(_pwdir2, "seed.db")
+
+    def _ws_boot(officer):
+        if officer is None:
+            os.environ.pop("LM_OFFICER_PASSWORD", None)
+        else:
+            os.environ["LM_OFFICER_PASSWORD"] = officer
+        os.environ.pop("LM_SUPERVISOR_PASSWORD", None)
+        _il.reload(db)
+        db.DATA_DIR, db.DB_PATH = _pwdir2, _pwdb2
+        db.UPLOAD_DIR = os.path.join(_pwdir2, "u")
+        db.REPORT_DIR = os.path.join(_pwdir2, "r")
+        db.init_db(_pwdb2)
+
+    def _ws_ok(password):
+        con = db.connect(_pwdb2)
+        try:
+            row = con.execute(
+                "SELECT password_hash FROM users WHERE username='officer'"
+            ).fetchone()
+            return bool(row) and db.verify_password(password, row["password_hash"])
+        finally:
+            con.close()
+
+    _WS = "seed-whitespace-probe-pw"
+    _ws_boot(_WS + "\n")
+    ck("37.10 a trailing newline in the secret is stripped", _ws_ok(_WS))
+    ck("37.11 the padded form is not what was stored", not _ws_ok(_WS + "\n"))
+    _ws_boot("  " + _WS + "  ")
+    ck("37.12 surrounding spaces are stripped too", _ws_ok(_WS))
+
+    # Worse than a newline: unstripped, a whitespace-only value counted as
+    # configured, so the committed default stopped working as well and nothing
+    # opened the account at all.
+    _pwdir3 = tempfile.mkdtemp(prefix="lm-seed-ws2-")
+    os.environ["LM_OFFICER_PASSWORD"] = "   "
+    os.environ.pop("LM_SUPERVISOR_PASSWORD", None)
+    _il.reload(db)
+    db.DATA_DIR, db.DB_PATH = _pwdir3, os.path.join(_pwdir3, "s.db")
+    db.UPLOAD_DIR = os.path.join(_pwdir3, "u")
+    db.REPORT_DIR = os.path.join(_pwdir3, "r")
+    db.init_db(db.DB_PATH)
+    _con3 = db.connect(db.DB_PATH)
+    _row3 = _con3.execute(
+        "SELECT password_hash FROM users WHERE username='officer'").fetchone()
+    _con3.close()
+    ck("37.13 a whitespace-only secret does not lock the account out",
+       db.verify_password("officer-2026", _row3["password_hash"]))
+    ck("37.14 and is not reported as a configured password",
+       db.seeded_passwords_are_default())
+
     for _k in ("LM_OFFICER_PASSWORD", "LM_SUPERVISOR_PASSWORD"):
         os.environ.pop(_k, None)
     _il.reload(db)
